@@ -3,10 +3,8 @@ import javafx.application.Platform;
 import javafx.event.ActionEvent;
 import javafx.event.EventHandler;
 import javafx.scene.Scene;
-import javafx.scene.control.Alert;
-import javafx.scene.control.Button;
-import javafx.scene.control.TextArea;
-import javafx.scene.control.TextInputDialog;
+import javafx.scene.control.*;
+import javafx.scene.input.KeyCode;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
@@ -33,6 +31,10 @@ public class Client extends Application implements EventHandler<ActionEvent> {
     private VBox root = new VBox(8);
 
     // UI Components
+    private MenuBar menuBar = new MenuBar();
+    private Menu menu = new Menu("Options");
+    private MenuItem menuItemUpload = new MenuItem("Upload File");
+    private MenuItem menuItemLogout = new MenuItem("Logout");
     private TextArea taChat = new TextArea();
     private TextArea taInput = new TextArea();
     private Button btnSend = new Button("Send");
@@ -48,59 +50,52 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         launch(args);
     }
 
-    public void start(Stage _stage) {
-        stage = _stage;
-        stage.setTitle("Chat Server");
-        stage.setOnCloseRequest(new EventHandler<WindowEvent>() {
-            @Override
-            public void handle(WindowEvent windowEvent) {
-                disconnectServer();
-                System.exit(0);
-            }
+    public void start(Stage stage) {
+        stage = stage;
+        stage.setOnCloseRequest((WindowEvent windowEvent) -> {
+            disconnectServer();
+            System.exit(0);
         });
+
+        menu.getItems().addAll(menuItemUpload, menuItemLogout);
+        menuBar.getMenus().addAll(menu);
+        menuItemUpload.setOnAction(this);
+        menuItemLogout.setOnAction(this);
 
         FlowPane fpBot = new FlowPane(8, 8);
         taInput.setPrefColumnCount(30);
         taInput.setPrefRowCount(3);
-        btnSend.setDisable(true);
-        taInput.textProperty().addListener((observable, oldValue, newValue) -> {
-            if (newValue.length() != 0) {
-                btnSend.setDisable(false);
-            } else {
-                btnSend.setDisable(true);
+        taInput.setOnKeyPressed(keyEvent -> {
+            if (keyEvent.getCode() == KeyCode.ENTER) {
+                if (keyEvent.isShiftDown()) {
+                    taInput.appendText("\n");
+
+                } else if (!taInput.getText().trim().equals("")) {
+                    handleSend();
+                } else {
+                    taInput.clear();
+                }
             }
         });
+        btnSend.setDisable(true);
+        taInput.textProperty().addListener((observable, oldValue, newValue) -> btnSend.setDisable(newValue.trim().length() == 0));
         fpBot.getChildren().addAll(taInput, btnSend);
 
         btnSend.setOnAction(this);
 
         taChat.setDisable(true);
-        root.getChildren().addAll(taChat, fpBot);
+        taChat.setStyle("-fx-font-family: monospace; -fx-opacity: 1.0");
+        root.getChildren().addAll(menuBar, taChat, fpBot);
         scene = new Scene(root, 500, 300);
         stage.setScene(scene);
-        stage.setOnShowing(new EventHandler<WindowEvent>() {
-            @Override
-            public void handle(WindowEvent windowEvent) {
-//                showDialog("User Login", "Please enter your username: ", new Consumer<String>() {
-//                    @Override
-//                    public void accept(String username) {
-//                        doConnect(username);
-//                    }
-//                });
-                LoginDialog loginDialog = new LoginDialog();
-                Optional<Pair<String, String>> result = loginDialog.showAndWait();
-                result.ifPresentOrElse(new Consumer<Pair<String, String>>() {
-                    @Override
-                    public void accept(Pair<String, String> loginCredentials) {
-                        doConnect(loginCredentials.getKey(), loginCredentials.getValue());
-                    }
-                }, new Runnable() {
-                    @Override
-                    public void run() {
-                        System.exit(0);
-                    }
-                });
-            }
+        final Stage mainStage = stage;
+        stage.setOnShowing((WindowEvent windowEvent) -> {
+            LoginDialog loginDialog = new LoginDialog();
+            Optional<Pair<String, String>> result = loginDialog.showAndWait();
+            result.ifPresentOrElse((Pair<String, String> loginCredentials) -> {
+                doConnect(loginCredentials.getKey(), loginCredentials.getValue());
+                mainStage.setTitle("Chat Room - " + loginCredentials.getValue());
+            }, () -> System.exit(0));
         });
         stage.show();
     }
@@ -111,18 +106,45 @@ public class Client extends Application implements EventHandler<ActionEvent> {
      * @param ae triggered action event
      */
     public void handle(ActionEvent ae) {
-        Button btn = (Button) ae.getSource();
-
-        switch (btn.getText()) {
+        Object event = ae.getSource();
+        String command = "";
+        if (event instanceof Button btn) {
+            command = btn.getText();
+        } else if (event instanceof MenuItem menuItem) {
+            command = menuItem.getText();
+        }
+        switch (command) {
             case "Send":
                 handleSend();
                 break;
+            case "Upload File":
+                handleUpload();
+                break;
+            case "Logout":
+                handleLogout();
+                break;
+            default:
+                break;
         }
+    }
+
+    private void handleLogout() {
+//        dos.writeInt(RequestType.LOGOUT.ordinal());
+//        dos.close();
+//        dis.close();
+//        socket.close();
+//        stage.close();
+//        Platform.runLater(() -> new Client().start);
+    }
+
+    private void handleUpload() {
+        // TODO: upload file to server
     }
 
     private void handleSend() {
         try {
             String message = taInput.getText();
+            dos.writeInt(RequestType.MESSAGE.ordinal());
             dos.writeUTF(message);
             dos.flush();
             taInput.clear();
@@ -137,7 +159,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
      */
     private void disconnectServer() {
         try {
-            dos.writeUTF(new String("Disconnect"));
+            dos.writeUTF("Disconnect");
             dis.close();
             dos.close();
             socket.close();
@@ -160,8 +182,8 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             messageService = new ProcessThread(dis);
             messageService.start();
         } catch (IOException ioe) {
-            alert(Alert.AlertType.ERROR, "Error", "IO Exception: " + ioe + "\n");
-            return;
+            alert(Alert.AlertType.ERROR, "Server Unavailable", ioe + "");
+            System.exit(0);
         }
     }
 
@@ -191,17 +213,12 @@ public class Client extends Application implements EventHandler<ActionEvent> {
 
         // handle action
         Optional<String> result = dialog.showAndWait();
-        result.ifPresentOrElse(action, new Runnable() {
-            @Override
-            public void run() {
-                System.exit(0);
-            }
-        });
+        result.ifPresentOrElse(action, () -> System.exit(0));
     }
 
     class ProcessThread extends Thread {
-        public DataInputStream dis;
-        public boolean serverRunning;
+        private DataInputStream dis;
+        private boolean serverRunning;
 
         public ProcessThread(DataInputStream dis) {
             this.dis = dis;
@@ -225,12 +242,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         }
 
         private void log(String message) {
-            Platform.runLater(new Runnable() {
-                @Override
-                public void run() {
-                    taChat.appendText(message + "\n");
-                }
-            });
+            Platform.runLater(() -> taChat.appendText(message + "\n"));
         }
     }
 }
