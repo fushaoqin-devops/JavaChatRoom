@@ -63,7 +63,7 @@ public class Server {
                 addUserToChatRoom(user, roomId);
                 broadCastMessage(String.format("User: %s logged in", username));
 
-                while (true) {
+                while (!isInterrupted()) {
                     int method = dis.readInt();
                     if (method < 0 || method >= REQUEST_TYPES.length) {
                         System.out.println("Invalid request type");
@@ -89,6 +89,7 @@ public class Server {
                 }
             } catch (Exception ex) {
                 ex.printStackTrace();
+                interrupt();
             }
         }
 
@@ -96,6 +97,7 @@ public class Server {
             ChatRoom currentChatRoom = getCurrentChatRoom(roomId);
             User currentUser = currentChatRoom.getUserById(userId);
             currentUser.setStatus(Status.offline);
+            interrupt();
         }
 
         public ChatRoom getCurrentChatRoom(String id) {

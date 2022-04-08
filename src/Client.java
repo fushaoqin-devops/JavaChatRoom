@@ -11,10 +11,7 @@ import javafx.stage.Stage;
 import javafx.stage.WindowEvent;
 import javafx.util.Pair;
 
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.io.EOFException;
-import java.io.IOException;
+import java.io.*;
 import java.net.Socket;
 import java.util.Optional;
 import java.util.function.Consumer;
@@ -45,6 +42,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
     private DataOutputStream dos = null;
     private DataInputStream dis = null;
     private Thread messageService = null;
+    private String currentUserName = "";
 
     public static void main(String[] args) {
         launch(args);
@@ -90,14 +88,33 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         stage.setScene(scene);
         final Stage mainStage = stage;
         stage.setOnShowing((WindowEvent windowEvent) -> {
-            LoginDialog loginDialog = new LoginDialog();
-            Optional<Pair<String, String>> result = loginDialog.showAndWait();
-            result.ifPresentOrElse((Pair<String, String> loginCredentials) -> {
-                doConnect(loginCredentials.getKey(), loginCredentials.getValue());
-                mainStage.setTitle("Chat Room - " + loginCredentials.getValue());
-            }, () -> System.exit(0));
+            Pair<String, String> prevSessionInfo = loadUserInfo();
+            if (prevSessionInfo != null) {
+                doConnect(prevSessionInfo.getKey(), prevSessionInfo.getValue());
+                mainStage.setTitle("Chat Room - " + prevSessionInfo.getValue());
+            } else {
+                LoginDialog loginDialog = new LoginDialog();
+                Optional<Pair<String, String>> result = loginDialog.showAndWait();
+                result.ifPresentOrElse((Pair<String, String> loginCredentials) -> {
+                    doConnect(loginCredentials.getKey(), loginCredentials.getValue());
+                    mainStage.setTitle("Chat Room - " + loginCredentials.getValue());
+                }, () -> System.exit(0));
+            }
         });
         stage.show();
+    }
+
+    private Pair<String, String> loadUserInfo() {
+        try {
+            File file = new File("CurrentUser.txt");
+            FileInputStream fis = new FileInputStream(file);
+            DataInputStream dis = new DataInputStream(fis);
+            String username = dis.readUTF();
+            String roomId = dis.readUTF();
+            return new Pair<String, String>(username, roomId);
+        } catch (IOException e) {
+            return null;
+        }
     }
 
     /**
@@ -113,28 +130,47 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         } else if (event instanceof MenuItem menuItem) {
             command = menuItem.getText();
         }
-        switch (command) {
-            case "Send":
-                handleSend();
-                break;
-            case "Upload File":
-                handleUpload();
-                break;
-            case "Logout":
-                handleLogout();
-                break;
-            default:
-                break;
+        try {
+            switch (command) {
+                case "Send":
+                    handleSend();
+                    break;
+                case "Upload File":
+                    handleUpload();
+                    break;
+                case "Logout":
+                    handleLogout();
+                    break;
+                default:
+                    break;
+            }
+        } catch (Exception e) {
+            String methodName = e.getStackTrace()[0].getMethodName();
+            alert(Alert.AlertType.ERROR, "Error", "Error invoking " + methodName + ": " + e.getMessage());
         }
+
+
     }
 
-    private void handleLogout() {
-//        dos.writeInt(RequestType.LOGOUT.ordinal());
-//        dos.close();
-//        dis.close();
-//        socket.close();
-//        stage.close();
-//        Platform.runLater(() -> new Client().start);
+    private void handleLogout() throws IOException {
+        dos.writeInt(RequestType.LOGOUT.ordinal());
+        disconnectServer();
+        File tempUserFile = new File("CurrentUser.txt");
+        showDialog("Do you want to join another room?", "Room ID: ", (String id) -> {
+            try {
+                FileOutputStream fos = new FileOutputStream(tempUserFile, false);
+                DataOutputStream dos = new DataOutputStream(fos);
+                dos.writeUTF(currentUserName);
+                dos.writeUTF(id);
+                ((Stage) scene.getWindow()).close();
+                Platform.runLater(() -> new Client().start(new Stage()));
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }, () -> {
+            tempUserFile.delete();
+            System.exit(0);
+        });
     }
 
     private void handleUpload() {
@@ -159,11 +195,10 @@ public class Client extends Application implements EventHandler<ActionEvent> {
      */
     private void disconnectServer() {
         try {
-            dos.writeUTF("Disconnect");
+            messageService.interrupt();
             dis.close();
             dos.close();
             socket.close();
-            messageService.interrupt();
         } catch (Exception e) {
             alert(Alert.AlertType.ERROR, "Error", e + "\n");
         }
@@ -181,6 +216,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             dos.writeUTF(roomId);
             messageService = new ProcessThread(dis);
             messageService.start();
+            currentUserName = username;
         } catch (IOException ioe) {
             alert(Alert.AlertType.ERROR, "Server Unavailable", ioe + "");
             System.exit(0);
@@ -206,34 +242,31 @@ public class Client extends Application implements EventHandler<ActionEvent> {
      * @param contentText prompt text
      * @param action      Consumer action for handling yes
      */
-    private void showDialog(String headerText, String contentText, Consumer<String> action) {
+    private void showDialog(String headerText, String contentText, Consumer<String> action, Runnable emptyAction) {
         TextInputDialog dialog = new TextInputDialog();
         dialog.setHeaderText(headerText);
         dialog.setContentText(contentText);
 
         // handle action
         Optional<String> result = dialog.showAndWait();
-        result.ifPresentOrElse(action, () -> System.exit(0));
+        result.ifPresentOrElse(action, emptyAction);
     }
 
     class ProcessThread extends Thread {
         private DataInputStream dis;
-        private boolean serverRunning;
 
         public ProcessThread(DataInputStream dis) {
             this.dis = dis;
-            serverRunning = true;
         }
 
         @Override
         public void run() {
-            while (serverRunning) {
+            while (!Thread.currentThread().isInterrupted()) {
                 try {
                     String message = dis.readUTF();
                     log(message + "\n");
                 } catch (EOFException eof) {
                     log("Server disconnected.");
-                    serverRunning = false;
                     Thread.currentThread().interrupt();
                 } catch (IOException e) {
                     e.printStackTrace();
