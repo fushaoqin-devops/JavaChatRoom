@@ -67,7 +67,6 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             if (keyEvent.getCode() == KeyCode.ENTER) {
                 if (keyEvent.isShiftDown()) {
                     taInput.appendText("\n");
-
                 } else if (!taInput.getText().trim().equals("")) {
                     handleSend();
                 } else {
@@ -81,7 +80,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
 
         btnSend.setOnAction(this);
 
-        taChat.setDisable(true);
+        taChat.setEditable(false);
         taChat.setStyle("-fx-font-family: monospace; -fx-opacity: 1.0");
         root.getChildren().addAll(menuBar, taChat, fpBot);
         scene = new Scene(root, 500, 300);

@@ -1,32 +1,23 @@
-import java.io.DataOutputStream;
+import java.io.Serializable;
 
 enum Status {
     online, offline
 }
 
-public class User {
+public class User implements Serializable {
+    private static final long serialVersionUid = 02L;
     private String id;
     private String username;
-    private DataOutputStream client;
     private Status status;
 
-    public User(String id, String username, DataOutputStream client, Status status) {
+    public User(String id, String username, Status status) {
         this.id = id;
         this.username = username;
-        this.client = client;
         this.status = status;
     }
 
     public String getId() {
         return id;
-    }
-
-    public DataOutputStream getClient() {
-        return client;
-    }
-
-    public void setClient(DataOutputStream client) {
-        this.client = client;
     }
 
     public void setId(String id) {

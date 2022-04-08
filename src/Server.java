@@ -1,6 +1,4 @@
-import java.io.DataInputStream;
-import java.io.DataOutputStream;
-import java.io.IOException;
+import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.UUID;
@@ -17,9 +15,60 @@ public class Server {
     public static final int SERVER_PORT = 8080;
     public static final RequestType[] REQUEST_TYPES = RequestType.values();
     private ConcurrentHashMap<String, ChatRoom> chatRooms = new ConcurrentHashMap<>();
+    private ConcurrentHashMap<String, DataOutputStream> onlineClients = new ConcurrentHashMap<>();
 
     public static void main(String[] args) {
-        new Server().execute();
+        Server server = new Server();
+        server.loadPrevSessionInfo();
+        server.execute();
+    }
+
+    private void saveCurrentSessionInfo() {
+        if (!chatRooms.isEmpty()) {
+
+            for (ChatRoom room : chatRooms.values()) {
+                try {
+                    saveChatRoomHistory(room);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+    }
+
+    private void saveChatRoomHistory(ChatRoom room) throws IOException {
+        File dir = new File("./ChatRooms");
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        File file = new File("./ChatRooms/ChatRoom_" + room.getId() + ".obj");
+        FileOutputStream fos = new FileOutputStream(file, false);
+        ObjectOutputStream oos = new ObjectOutputStream(fos);
+        oos.writeObject(room);
+        fos.close();
+        oos.close();
+    }
+
+    private void loadPrevSessionInfo() {
+        File[] files = new File("./ChatRooms").listFiles(new FileFilter() {
+            @Override
+            public boolean accept(File pathname) {
+                return pathname.getName().toLowerCase().endsWith(".obj");
+            }
+        });
+
+        for (File file : files) {
+            try {
+                FileInputStream fis = new FileInputStream(file);
+                ObjectInputStream ois = new ObjectInputStream(fis);
+                ChatRoom room = (ChatRoom) ois.readObject();
+                chatRooms.put(room.getId(), room);
+            } catch (IOException e) {
+                e.printStackTrace();
+            } catch (ClassNotFoundException e) {
+                e.printStackTrace();
+            }
+        }
     }
 
     public void execute() {
@@ -57,11 +106,13 @@ public class Server {
                 DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
                 String username = dis.readUTF();
                 userId = UUID.randomUUID().toString();
-                User user = new User(userId, username, dos, Status.online);
+                User user = new User(userId, username, Status.online);
+                onlineClients.put(userId, dos);
 
                 roomId = dis.readUTF();
                 addUserToChatRoom(user, roomId);
-                broadCastMessage(String.format("User: %s logged in", username));
+                loadChatHistory(dos);
+                broadCastMessage(String.format("%s joined", username));
 
                 while (!isInterrupted()) {
                     int method = dis.readInt();
@@ -93,10 +144,20 @@ public class Server {
             }
         }
 
-        private void logoutUser() {
+        private void loadChatHistory(DataOutputStream client) throws IOException {
+            if (chatRooms.containsKey(roomId)) {
+                for (String message : chatRooms.get(roomId).getChatHistory()) {
+                    client.writeUTF(message);
+                }
+            }
+        }
+
+        private void logoutUser() throws IOException {
             ChatRoom currentChatRoom = getCurrentChatRoom(roomId);
             User currentUser = currentChatRoom.getUserById(userId);
             currentUser.setStatus(Status.offline);
+            onlineClients.remove(userId);
+            broadCastMessage(String.format("%s left", currentUser.getUsername()));
             interrupt();
         }
 
@@ -112,11 +173,11 @@ public class Server {
 
         public void broadCastMessage(String message) throws IOException {
             ChatRoom currentChatRoom = getCurrentChatRoom(roomId);
-            for (User user : currentChatRoom.getOnlineUsers()) {
-                user.getClient().writeUTF(message);
+            currentChatRoom.addChatHistory(message);
+            for (DataOutputStream client : onlineClients.values()) {
+                client.writeUTF(message);
             }
+            saveCurrentSessionInfo();
         }
-
-
     }
 }
