@@ -8,14 +8,15 @@ enum RequestType {
     MESSAGE,
     UPLOAD,
     DOWNLOAD,
-    LOGOUT;
+    LOGOUT,
+    USERS;
 }
 
 public class Server {
     public static final int SERVER_PORT = 8080;
     public static final RequestType[] REQUEST_TYPES = RequestType.values();
     private ConcurrentHashMap<String, ChatRoom> chatRooms = new ConcurrentHashMap<>();
-    private ConcurrentHashMap<String, DataOutputStream> onlineClients = new ConcurrentHashMap<>();
+    private ConcurrentHashMap<String, ConcurrentHashMap<String, DataOutputStream>> onlineClientsWithRoomId = new ConcurrentHashMap<>();
 
     public static void main(String[] args) {
         Server server = new Server();
@@ -57,11 +58,17 @@ public class Server {
             }
         });
 
+        if (files == null) return;
+
         for (File file : files) {
             try {
                 FileInputStream fis = new FileInputStream(file);
                 ObjectInputStream ois = new ObjectInputStream(fis);
                 ChatRoom room = (ChatRoom) ois.readObject();
+                // On server start, reset all users to offline
+                for (User user : room.getUsers()) {
+                    user.setStatus(Status.offline);
+                }
                 chatRooms.put(room.getId(), room);
             } catch (IOException e) {
                 e.printStackTrace();
@@ -90,6 +97,7 @@ public class Server {
         Socket socket;
         String userId;
         String roomId;
+        ConcurrentHashMap<String, DataOutputStream> onlineClients;
 
         public ClientThread(Socket socket) {
             this.socket = socket;
@@ -105,14 +113,27 @@ public class Server {
                 DataInputStream dis = new DataInputStream(socket.getInputStream());
                 DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
                 String username = dis.readUTF();
-                userId = UUID.randomUUID().toString();
-                User user = new User(userId, username, Status.online);
-                onlineClients.put(userId, dos);
-
                 roomId = dis.readUTF();
+
+                User user = getExistingUserByUsername(username);
+
+                onlineClients = onlineClientsWithRoomId.getOrDefault(roomId, new ConcurrentHashMap<String, DataOutputStream>());
+
+                if (user != null) {
+                    userId = user.getId();
+                    user.setStatus(Status.online);
+                    onlineClients.put(user.getId(), dos);
+                } else {
+                    userId = UUID.randomUUID().toString();
+                    user = new User(userId, username, Status.online);
+                    onlineClients.put(userId, dos);
+                }
+
+                onlineClientsWithRoomId.put(roomId, onlineClients);
+
                 addUserToChatRoom(user, roomId);
                 loadChatHistory(dos);
-                broadCastMessage(String.format("%s joined", username));
+                broadCastMessage(String.format("%s joined", username), true);
 
                 while (!isInterrupted()) {
                     int method = dis.readInt();
@@ -124,7 +145,7 @@ public class Server {
                     switch (requestType) {
                         case MESSAGE:
                             String message = dis.readUTF();
-                            broadCastMessage(username + ": " + message);
+                            broadCastMessage(username + ": " + message, false);
                             break;
                         case UPLOAD:
                             break;
@@ -132,6 +153,9 @@ public class Server {
                             break;
                         case LOGOUT:
                             logoutUser();
+                            break;
+                        case USERS:
+                            loadAllUsersInChatRoom();
                             break;
                         default:
                             System.out.println("Unknown request type received");
@@ -144,9 +168,40 @@ public class Server {
             }
         }
 
+        private User getExistingUserByUsername(String username) {
+            ChatRoom existingChatRoom = chatRooms.getOrDefault(roomId, null);
+            return existingChatRoom != null ? chatRooms.get(roomId).getUserByUsername(username) : null;
+        }
+
+        private void loadAllUsersInChatRoom() throws IOException {
+            ChatRoom room = chatRooms.get(roomId);
+            DataOutputStream dos = onlineClients.get(userId);
+            for (User user : room.getUsers()) {
+                dos.writeInt(ResponseType.USERS.ordinal());
+                dos.writeUTF(user.getUsername());
+                dos.writeInt(user.getStatus().ordinal());
+            }
+            updateAllOnlineClients(Status.online.ordinal());
+        }
+
+        private void updateAllOnlineClients(int status) {
+            onlineClients.forEach((key, value) -> {
+                if (!key.equals(userId)) {
+                    try {
+                        value.writeInt(ResponseType.USERS.ordinal());
+                        value.writeUTF(chatRooms.get(roomId).getUserById(userId).getUsername());
+                        value.writeInt(status);
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                }
+            });
+        }
+
         private void loadChatHistory(DataOutputStream client) throws IOException {
             if (chatRooms.containsKey(roomId)) {
                 for (String message : chatRooms.get(roomId).getChatHistory()) {
+                    client.writeInt(ResponseType.MESSAGE.ordinal());
                     client.writeUTF(message);
                 }
             }
@@ -157,7 +212,8 @@ public class Server {
             User currentUser = currentChatRoom.getUserById(userId);
             currentUser.setStatus(Status.offline);
             onlineClients.remove(userId);
-            broadCastMessage(String.format("%s left", currentUser.getUsername()));
+            broadCastMessage(String.format("%s left", currentUser.getUsername()), true);
+            updateAllOnlineClients(Status.offline.ordinal());
             interrupt();
         }
 
@@ -171,10 +227,13 @@ public class Server {
             chatRooms.put(existingChatRoom.getId(), existingChatRoom);
         }
 
-        public void broadCastMessage(String message) throws IOException {
+        public void broadCastMessage(String message, Boolean isSystemMessage) throws IOException {
             ChatRoom currentChatRoom = getCurrentChatRoom(roomId);
-            currentChatRoom.addChatHistory(message);
+            if (!isSystemMessage) {
+                currentChatRoom.addChatHistory(message);
+            }
             for (DataOutputStream client : onlineClients.values()) {
+                client.writeInt(ResponseType.MESSAGE.ordinal());
                 client.writeUTF(message);
             }
             saveCurrentSessionInfo();

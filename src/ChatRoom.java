@@ -8,9 +8,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class ChatRoom implements Serializable {
     private static final long serialVersionUid = 01L;
     private String id;
-    //    private Vector<User> users;
     private ConcurrentHashMap<String, User> users;
-
     private List<String> chatHistory;
 
     public ChatRoom(String id) {
@@ -59,5 +57,14 @@ public class ChatRoom implements Serializable {
 
     public void addUser(String id, User user) {
         this.users.put(id, user);
+    }
+
+    public User getUserByUsername(String username) {
+        for (User user : users.values()) {
+            if (user.getUsername().equals(username)) {
+                return user;
+            }
+        }
+        return null;
     }
 }
