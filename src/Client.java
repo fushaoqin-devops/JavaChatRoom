@@ -52,8 +52,8 @@ public class Client extends Application implements EventHandler<ActionEvent> {
 
     // Other attributes
     public static final int SERVER_PORT = 8080;
-    public static final ResponseType[] RESPONSE_TYPES = ResponseType.values();
-    public static final Status[] STATUS_TYPES = Status.values();
+    public static final ResponseType[] RESPONSE_TYPES = ResponseType.values();  // All server response types
+    public static final Status[] STATUS_TYPES = Status.values();    // ONLINE/OFFLINE
     private Socket socket = null;
     private DataOutputStream dos = null;
     private DataInputStream dis = null;
@@ -64,6 +64,11 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         launch(args);
     }
 
+    /**
+     * Initialize stage
+     *
+     * @param _stage primary stage
+     */
     public void start(Stage _stage) {
         stage = _stage;
         stage.setOnCloseRequest((WindowEvent windowEvent) -> {
@@ -71,6 +76,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             System.exit(0);
         });
 
+        // Menu section
         menuFile.getItems().addAll(menuItemUpload, menuItemDownload);
         menuUser.getItems().addAll(menuItemChangeRoom, menuItemLogout);
         menuBar.getMenus().addAll(menuFile, menuUser);
@@ -79,10 +85,12 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         menuItemChangeRoom.setOnAction(this);
         menuItemLogout.setOnAction(this);
 
+        // User input section
         FlowPane fpBot = new FlowPane(8, 8);
         taInput.setPrefColumnCount(30);
         taInput.setPrefRowCount(3);
         taInput.setOnKeyPressed(keyEvent -> {
+            // Enter key press will send the message, Shift + Enter will start on new line
             if (keyEvent.getCode() == KeyCode.ENTER) {
                 if (keyEvent.isShiftDown()) {
                     taInput.appendText("\n");
@@ -94,32 +102,42 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             }
         });
         btnSend.setDisable(true);
+
+        // Button is disabled if no input
         taInput.textProperty().addListener((observable, oldValue, newValue) -> btnSend.setDisable(newValue.trim().length() == 0));
         fpBot.getChildren().addAll(taInput, btnSend);
 
         btnSend.setOnAction(this);
 
+        // Chat room's chat section
         VBox chatSection = new VBox(8);
         taChat.setEditable(false);
         taChat.setStyle("-fx-font-family: monospace; -fx-opacity: 1.0");
         chatSection.getChildren().addAll(menuBar, taChat, fpBot);
 
+        // User status section
         listViewUsers.setCellFactory(new Callback<ListView, ListCell<Pair<String, Status>>>() {
             @Override
             public ListCell<Pair<String, Status>> call(ListView listView) {
                 return new UserStatusCell();
             }
         });
+
+
         root.getChildren().addAll(chatSection, listViewUsers);
         scene = new Scene(root, 500, 300);
         stage.setScene(scene);
         final Stage mainStage = stage;
+
+        // On stage start, check if temp user file exists
         stage.setOnShowing((WindowEvent windowEvent) -> {
             Pair<String, String> prevSessionInfo = loadUserInfo();
             if (prevSessionInfo != null) {
+                // If temp user file exists, directly send user to chat room
                 doConnect(prevSessionInfo.getKey(), prevSessionInfo.getValue());
                 mainStage.setTitle("Chat Room - " + prevSessionInfo.getValue());
             } else {
+                // If temp user file does not exist, prompt user for username and room id
                 LoginDialog loginDialog = new LoginDialog();
                 Optional<Pair<String, String>> result = loginDialog.showAndWait();
                 result.ifPresentOrElse((Pair<String, String> loginCredentials) -> {
@@ -131,6 +149,11 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         stage.show();
     }
 
+    /**
+     * Get user info from temp user file saved locally
+     *
+     * @return pair of username and room id
+     */
     private Pair<String, String> loadUserInfo() {
         try {
             File file = new File("./TempUser/CurrentUser.txt");
@@ -145,7 +168,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
     }
 
     /**
-     * Menu item dispatcher
+     * Action dispatcher
      *
      * @param ae triggered action event
      */
@@ -157,7 +180,8 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         } else if (event instanceof MenuItem menuItem) {
             command = menuItem.getText();
         }
-        System.out.println(command);
+
+        // Handle action
         try {
             switch (command) {
                 case "Send":
@@ -184,12 +208,19 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         }
     }
 
+    /**
+     * Log out user from current room and start a session in new chat room
+     *
+     * @throws IOException
+     */
     private void handleChangeRoom() throws IOException {
-
         showDialog("Do you want to join another room?", "Room ID: ", (String id) -> {
             try {
+                // Logout
                 dos.writeInt(RequestType.LOGOUT.ordinal());
                 disconnectServer();
+
+                // Save username and room id in temp user file locally
                 File dir = new File("./TempUser");
                 if (!dir.exists()) {
                     dir.mkdirs();
@@ -199,6 +230,8 @@ public class Client extends Application implements EventHandler<ActionEvent> {
                 DataOutputStream output = new DataOutputStream(tmpFileOutputStream);
                 output.writeUTF(currentUserName);
                 output.writeUTF(id);
+
+                // Close current stage and initialize a new stage
                 ((Stage) scene.getWindow()).close();
                 Platform.runLater(() -> {
                     new Client().start(new Stage());
@@ -211,8 +244,10 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         });
     }
 
+    /**
+     * Log out user
+     */
     private void handleLogout() {
-
         ArrayList<ButtonType> buttons = new ArrayList<>();
         ButtonType logoutButton = new ButtonType("Logout", ButtonBar.ButtonData.OK_DONE);
         buttons.add(logoutButton);
@@ -239,6 +274,9 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         // TODO: download file from server
     }
 
+    /**
+     * Send message to current chat room
+     */
     private void handleSend() {
         try {
             String message = taInput.getText().trim();
@@ -279,8 +317,9 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             messageService = new ProcessThread(dis);
             messageService.start();
             currentUserName = username;
+
+            // Broadcast user login to all online clients
             dos.writeInt(RequestType.USERS.ordinal());
-            System.out.println("here");
         } catch (IOException ioe) {
             alert(Alert.AlertType.ERROR, "Server Unavailable", ioe + "");
             System.exit(0);
@@ -299,6 +338,14 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         alert.showAndWait();
     }
 
+    /**
+     * Utility function to show simple dialog
+     *
+     * @param headerText  header text
+     * @param contentText prompt text
+     * @param action      action on button click
+     * @param buttons     action buttons
+     */
     private void showDialog(String headerText, String contentText, Consumer<ButtonType> action, ArrayList<ButtonType> buttons) {
         Dialog dialog = new Dialog();
         dialog.setHeaderText(headerText);
@@ -313,6 +360,14 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         result.ifPresent(action);
     }
 
+    /**
+     * Utility function to show text input dialog
+     *
+     * @param headerText  header text
+     * @param contentText prompt text
+     * @param action      action on user input
+     * @param emptyAction action on cancel
+     */
     private void showDialog(String headerText, String contentText, Consumer<String> action, Runnable emptyAction) {
         TextInputDialog dialog = new TextInputDialog();
         dialog.setHeaderText(headerText);
@@ -323,6 +378,9 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         result.ifPresentOrElse(action, emptyAction);
     }
 
+    /**
+     * Thread class to process server response
+     */
     class ProcessThread extends Thread {
         private DataInputStream dis;
 
@@ -339,6 +397,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
                         System.out.println("Invalid response type");
                         System.exit(0);
                     }
+
                     ResponseType responseType = RESPONSE_TYPES[method];
                     switch (responseType) {
                         case MESSAGE:
@@ -361,19 +420,26 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             }
         }
 
+        /**
+         * Populate user status section
+         *
+         * @throws IOException
+         */
         private void loadUsersInChatRoom() throws IOException {
             String username = dis.readUTF();
-            System.out.println(username);
             Status status = STATUS_TYPES[dis.readInt()];
-            System.out.println(status);
+
             Platform.runLater(() -> {
                 Pair<String, Status> user = new Pair(username, status);
+                // Check if user already in list view
                 int idx = listViewUsers.getItems().indexOf(new Pair(username, STATUS_TYPES[1 - status.ordinal()]));
                 if (idx == -1) {
                     listViewUsers.getItems().add(user);
                 } else {
                     listViewUsers.getItems().set(idx, user);
                 }
+
+                // Sort user based on online status
                 listViewUsers.getItems().sort(new Comparator<Pair<String, Status>>() {
                     @Override
                     public int compare(Pair<String, Status> o1, Pair<String, Status> o2) {
@@ -389,6 +455,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             });
         }
 
+        // Print message in chat
         private void log(String message) {
             Platform.runLater(() -> taChat.appendText(message + "\n"));
         }

@@ -4,6 +4,9 @@ import java.net.Socket;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * Enum of client's request types
+ */
 enum RequestType {
     MESSAGE,
     UPLOAD,
@@ -12,11 +15,14 @@ enum RequestType {
     USERS;
 }
 
+/**
+ * Server of the chat room app
+ */
 public class Server {
     public static final int SERVER_PORT = 8080;
-    public static final RequestType[] REQUEST_TYPES = RequestType.values();
-    private ConcurrentHashMap<String, ChatRoom> chatRooms = new ConcurrentHashMap<>();
-    private ConcurrentHashMap<String, ConcurrentHashMap<String, DataOutputStream>> onlineClientsWithRoomId = new ConcurrentHashMap<>();
+    public static final RequestType[] REQUEST_TYPES = RequestType.values(); // Constant array of all request type
+    private ConcurrentHashMap<String, ChatRoom> chatRooms = new ConcurrentHashMap<>();  // Each chat room object is mapped with their id
+    private ConcurrentHashMap<String, ConcurrentHashMap<String, DataOutputStream>> onlineClientsWithRoomId = new ConcurrentHashMap<>(); // List of online clients is mapped with chat room id
 
     public static void main(String[] args) {
         Server server = new Server();
@@ -24,6 +30,9 @@ public class Server {
         server.execute();
     }
 
+    /**
+     * Save all chat rooms locally
+     */
     private void saveCurrentSessionInfo() {
         if (!chatRooms.isEmpty()) {
 
@@ -37,7 +46,14 @@ public class Server {
         }
     }
 
+    /**
+     * Save the chat room object
+     *
+     * @param room the chat room instance
+     * @throws IOException
+     */
     private void saveChatRoomHistory(ChatRoom room) throws IOException {
+        // Chatroom objects are saved inside ChatRooms folder
         File dir = new File("./ChatRooms");
         if (!dir.exists()) {
             dir.mkdirs();
@@ -50,6 +66,9 @@ public class Server {
         oos.close();
     }
 
+    /**
+     * On server start, load locally saved chat rooms objects
+     */
     private void loadPrevSessionInfo() {
         File[] files = new File("./ChatRooms").listFiles(new FileFilter() {
             @Override
@@ -58,6 +77,7 @@ public class Server {
             }
         });
 
+        // In case of a fresh start
         if (files == null) return;
 
         for (File file : files) {
@@ -78,6 +98,9 @@ public class Server {
         }
     }
 
+    /**
+     * Start server socket and listen for client connections
+     */
     public void execute() {
 
         System.out.printf("Accepting Connection on port %d..", SERVER_PORT);
@@ -92,12 +115,14 @@ public class Server {
         }
     }
 
+    /**
+     * Client thread to handle each client request
+     */
     class ClientThread extends Thread {
-
         Socket socket;
         String userId;
         String roomId;
-        ConcurrentHashMap<String, DataOutputStream> onlineClients;
+        ConcurrentHashMap<String, DataOutputStream> onlineClients;  // Keep the record of all online clients in the current room
 
         public ClientThread(Socket socket) {
             this.socket = socket;
@@ -105,7 +130,6 @@ public class Server {
 
         @Override
         public void run() {
-
             try {
                 String ip = socket.getInetAddress().getHostName();
                 System.out.println("Accepting connection from ip " + ip);
@@ -115,20 +139,24 @@ public class Server {
                 String username = dis.readUTF();
                 roomId = dis.readUTF();
 
+                // Check if user is an existing user in current chat room
                 User user = getExistingUserByUsername(username);
-
                 onlineClients = onlineClientsWithRoomId.getOrDefault(roomId, new ConcurrentHashMap<String, DataOutputStream>());
 
+                // Adding/updating online clients
                 if (user != null) {
+                    // If existing user, then update the status
                     userId = user.getId();
                     user.setStatus(Status.online);
                     onlineClients.put(user.getId(), dos);
                 } else {
+                    // If new user, create new user and assign id
                     userId = UUID.randomUUID().toString();
                     user = new User(userId, username, Status.online);
                     onlineClients.put(userId, dos);
                 }
 
+                // Map current room's clients to room id
                 onlineClientsWithRoomId.put(roomId, onlineClients);
 
                 addUserToChatRoom(user, roomId);
@@ -137,10 +165,12 @@ public class Server {
 
                 while (!isInterrupted()) {
                     int method = dis.readInt();
+                    // Handle invalid request
                     if (method < 0 || method >= REQUEST_TYPES.length) {
                         System.out.println("Invalid request type");
                         System.exit(0);
                     }
+
                     RequestType requestType = REQUEST_TYPES[method];
                     switch (requestType) {
                         case MESSAGE:
@@ -168,22 +198,40 @@ public class Server {
             }
         }
 
+        /**
+         * Check if user exists in current chat room
+         *
+         * @param username current user's username
+         * @return
+         */
         private User getExistingUserByUsername(String username) {
             ChatRoom existingChatRoom = chatRooms.getOrDefault(roomId, null);
             return existingChatRoom != null ? chatRooms.get(roomId).getUserByUsername(username) : null;
         }
 
+        /**
+         * Get all users' username and status from room and send to clients
+         *
+         * @throws IOException
+         */
         private void loadAllUsersInChatRoom() throws IOException {
             ChatRoom room = chatRooms.get(roomId);
             DataOutputStream dos = onlineClients.get(userId);
+            // Update current user's client with all user information
             for (User user : room.getUsers()) {
                 dos.writeInt(ResponseType.USERS.ordinal());
                 dos.writeUTF(user.getUsername());
                 dos.writeInt(user.getStatus().ordinal());
             }
+            // Update all other clients about current user
             updateAllOnlineClients(Status.online.ordinal());
         }
 
+        /**
+         * Send current user information to other clients in this chat room
+         *
+         * @param status current user's status
+         */
         private void updateAllOnlineClients(int status) {
             onlineClients.forEach((key, value) -> {
                 if (!key.equals(userId)) {
@@ -198,6 +246,12 @@ public class Server {
             });
         }
 
+        /**
+         * Get chat history of current chat room and send to current user's client
+         *
+         * @param client current user's client
+         * @throws IOException
+         */
         private void loadChatHistory(DataOutputStream client) throws IOException {
             if (chatRooms.containsKey(roomId)) {
                 for (String message : chatRooms.get(roomId).getChatHistory()) {
@@ -207,35 +261,69 @@ public class Server {
             }
         }
 
+        /**
+         * Remove user from online clients. Note user is still considered a member of this chat room
+         *
+         * @throws IOException
+         */
         private void logoutUser() throws IOException {
             ChatRoom currentChatRoom = getCurrentChatRoom(roomId);
             User currentUser = currentChatRoom.getUserById(userId);
             currentUser.setStatus(Status.offline);
             onlineClients.remove(userId);
+
+            // Update all other clients that current user left this chat room
             broadCastMessage(String.format("%s left", currentUser.getUsername()), true);
+
+            // Change current user's status from all online clients
             updateAllOnlineClients(Status.offline.ordinal());
             interrupt();
         }
 
+        /**
+         * Get current chat room
+         *
+         * @param id chat room id
+         * @return
+         */
         public ChatRoom getCurrentChatRoom(String id) {
             return chatRooms.getOrDefault(id, new ChatRoom(roomId));
         }
 
+        /**
+         * Add current user to current chat room
+         *
+         * @param user   current user object
+         * @param roomId current room id
+         */
         public void addUserToChatRoom(User user, String roomId) {
             ChatRoom existingChatRoom = getCurrentChatRoom(roomId);
             existingChatRoom.addUser(user.getId(), user);
             chatRooms.put(existingChatRoom.getId(), existingChatRoom);
         }
 
+        /**
+         * Sync messages to all online clients
+         *
+         * @param message         chat message
+         * @param isSystemMessage true if message is system purposes (i.e. inform user about who joined and who left)
+         * @throws IOException
+         */
         public void broadCastMessage(String message, Boolean isSystemMessage) throws IOException {
             ChatRoom currentChatRoom = getCurrentChatRoom(roomId);
+
+            // Do not save system messages in chat room history
             if (!isSystemMessage) {
                 currentChatRoom.addChatHistory(message);
             }
+
+            // Send message to all online clients in this chat room
             for (DataOutputStream client : onlineClients.values()) {
                 client.writeInt(ResponseType.MESSAGE.ordinal());
                 client.writeUTF(message);
             }
+
+            // Update local chat room object
             saveCurrentSessionInfo();
         }
     }
