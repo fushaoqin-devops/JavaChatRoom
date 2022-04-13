@@ -1,37 +1,37 @@
-import java.io.DataOutputStream;
+import java.io.Serializable;
 
-public class User {
-    private String id;
+enum Status {
+    online, offline
+}
+
+/**
+ * User class represents a user from chat room
+ */
+public class User implements Serializable {
+    private static final long serialVersionUid = 02L;
+    private String id;  // User id. UUID as string
     private String username;
-    private DataOutputStream client;
+    private Status status;  // Status keep track if user is online or not
 
-    public User(String id, String username, DataOutputStream client) {
+    public User(String id, String username, Status status) {
         this.id = id;
         this.username = username;
-        this.client = client;
+        this.status = status;
     }
 
     public String getId() {
         return id;
     }
 
-    public DataOutputStream getClient() {
-        return client;
-    }
-
-    public void setClient(DataOutputStream client) {
-        this.client = client;
-    }
-
-    public void setId(String id) {
-        this.id = id;
-    }
-
     public String getUsername() {
         return username;
     }
 
-    public void setUsername(String username) {
-        this.username = username;
+    public Status getStatus() {
+        return status;
+    }
+
+    public void setStatus(Status status) {
+        this.status = status;
     }
 }
