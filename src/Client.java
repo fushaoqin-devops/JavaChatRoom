@@ -1,5 +1,8 @@
 import javafx.application.Application;
 import javafx.application.Platform;
+import javafx.beans.value.ChangeListener;
+import javafx.beans.value.ObservableValue;
+import javafx.collections.ObservableList;
 import javafx.event.ActionEvent;
 import javafx.event.EventHandler;
 import javafx.scene.Scene;
@@ -8,6 +11,7 @@ import javafx.scene.input.KeyCode;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
+import javafx.stage.DirectoryChooser;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 import javafx.stage.WindowEvent;
@@ -17,13 +21,17 @@ import javafx.util.Pair;
 import java.io.*;
 import java.net.Socket;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Optional;
 import java.util.function.Consumer;
 
 enum ResponseType {
     MESSAGE,
-    USERS
+    USERS,
+    FILES,
+    UPLOAD,
+    DOWNLOAD
 }
 
 /**
@@ -61,6 +69,8 @@ public class Client extends Application implements EventHandler<ActionEvent> {
     private Thread messageService = null;
     private String currentUserName = "";
     private String roomId = "";
+    private ArrayList<String> fileList = null;
+    private Boolean loaded = false;
 
     public static void main(String[] args) {
         launch(args);
@@ -295,8 +305,64 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         }
     }
 
-    private void handleDownload() {
-        // TODO: download file from server
+    private void handleDownload() throws IOException {
+        if (fileList == null) {
+            dos.writeInt(RequestType.FILES.ordinal());
+        }
+        while (!loaded) {
+            System.out.println("loading");
+        }
+        ListView<String> listViewFiles = new ListView<String>();
+        for (String filename : fileList) {
+            listViewFiles.getItems().add(filename);
+        }
+        listViewFiles.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
+
+        Dialog files = new Dialog();
+        files.setHeaderText("File on chat room server");
+        files.getDialogPane().setContent(listViewFiles);
+        ButtonType downloadButtonType = new ButtonType("Download");
+        files.getDialogPane().getButtonTypes().addAll(downloadButtonType, ButtonType.CANCEL);
+        Button btnDownload = (Button) files.getDialogPane().lookupButton(downloadButtonType);
+        btnDownload.setDisable(true);
+        listViewFiles.getSelectionModel().selectedItemProperty().addListener(new ChangeListener<String>() {
+            @Override
+            public void changed(ObservableValue<? extends String> observableValue, String s, String t1) {
+                if (listViewFiles.getSelectionModel().getSelectedItems().size() == 0) {
+                    btnDownload.setDisable(true);
+                } else {
+                    btnDownload.setDisable(false);
+                }
+            }
+        });
+        files.setResultConverter(dialogButton -> {
+            if (dialogButton == downloadButtonType) {
+                return listViewFiles.getSelectionModel().getSelectedItems();
+            }
+            return null;
+        });
+        Optional<ObservableList<String>> result = files.showAndWait();
+        result.ifPresent(new Consumer<ObservableList<String>>() {
+            @Override
+            public void accept(ObservableList<String> list) {
+                System.out.println(list.toString());
+                DirectoryChooser dc = new DirectoryChooser();
+                File dir = dc.showDialog(stage);
+                for (String filename : list) {
+                    try {
+                        downloadFileFromServer(filename, dir.getAbsolutePath());
+                    } catch (IOException ioe) {
+                        ioe.printStackTrace();
+                    }
+                }
+            }
+        });
+    }
+
+    private void downloadFileFromServer(String filename, String path) throws IOException {
+        dos.writeInt(RequestType.DOWNLOAD.ordinal());
+        dos.writeUTF(filename);
+        dos.writeUTF(path);
     }
 
     /**
@@ -429,6 +495,15 @@ public class Client extends Application implements EventHandler<ActionEvent> {
                         case USERS:
                             loadUsersInChatRoom();
                             break;
+                        case FILES:
+                            populateFileList();
+                            break;
+                        case UPLOAD:
+                            updateFileList();
+                            break;
+                        case DOWNLOAD:
+                            downloadFile();
+                            break;
                         default:
                             System.out.println("Unknown response type received");
                             break;
@@ -442,6 +517,35 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             }
         }
 
+        private void downloadFile() throws IOException {
+            long fileSize = dis.readLong();
+            String filePath = dis.readUTF();
+            File file = new File(filePath);
+            FileOutputStream fos = new FileOutputStream(file);
+            if (!(fileSize > 0)) {
+                return;
+            }
+            int bytes;
+            byte[] buffer = new byte[(int) fileSize];
+            while (fileSize > 0 && (bytes = dis.read(buffer, 0, (int) Math.min(buffer.length, fileSize))) != -1) {
+                fos.write(buffer, 0, bytes);
+                fileSize -= bytes;
+            }
+        }
+
+        private void updateFileList() throws IOException {
+            if (fileList != null) {
+                String filename = dis.readUTF();
+                fileList.add(filename); // TODO: use vector or lock
+            }
+        }
+
+        private void populateFileList() throws IOException {
+            String[] filenames = dis.readUTF().split(",");
+            fileList = new ArrayList<>(Arrays.asList(filenames));
+            loaded = true;
+        }
+
         /**
          * Populate user status section
          *
@@ -450,8 +554,6 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         private void loadUsersInChatRoom() throws IOException {
             String username = dis.readUTF();
             Status status = STATUS_TYPES[dis.readInt()];
-            System.out.println(username);
-            System.out.println(status);
 
             Platform.runLater(() -> {
                 Pair<String, Status> user = new Pair<String, Status>(username, status);

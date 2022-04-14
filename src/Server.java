@@ -11,6 +11,7 @@ enum RequestType {
     MESSAGE,
     UPLOAD,
     DOWNLOAD,
+    FILES,
     LOGOUT,
     USERS;
 }
@@ -182,7 +183,11 @@ public class Server {
                         case UPLOAD:
                             uploadFile();
                             break;
+                        case FILES:
+                            getAllFiles();
+                            break;
                         case DOWNLOAD:
+                            downloadFile();
                             break;
                         case LOGOUT:
                             logoutUser();
@@ -199,6 +204,39 @@ public class Server {
                 ex.printStackTrace();
                 interrupt();
             }
+        }
+
+        private void downloadFile() throws IOException {
+            String filename = dis.readUTF();
+            String path = dis.readUTF();
+            File file = new File("./Files/" + roomId + "/" + filename);
+
+            dos.writeInt(ResponseType.DOWNLOAD.ordinal());
+            dos.writeLong(file.length());
+            dos.writeUTF(path + "/" + filename);
+            FileInputStream fis = new FileInputStream(file);
+            int bytes;
+            byte[] buffer = new byte[(int) file.length()];
+            while ((bytes = fis.read(buffer, 0, buffer.length)) > 0) {
+                dos.write(buffer, 0, bytes);
+            }
+            dos.writeInt(ResponseType.MESSAGE.ordinal());
+            dos.writeUTF(filename + " downloaded successfully");
+        }
+
+        private void getAllFiles() throws IOException {
+            ChatRoom currentChatRoom = getCurrentChatRoom(roomId);
+            File folder = new File("./Files/" + roomId);
+            if (!folder.exists()) {
+                folder.mkdirs();
+            }
+            StringBuilder filenames = new StringBuilder();
+            File[] files = folder.listFiles();
+            for (File f : files) {
+                filenames.append(filenames.isEmpty() ? f.getName() : "," + f.getName());
+            }
+            dos.writeInt(ResponseType.FILES.ordinal());
+            dos.writeUTF(filenames.toString());
         }
 
         private void uploadFile() throws IOException {
@@ -220,6 +258,21 @@ public class Server {
                 fos.write(buffer, 0, bytes);
                 fileSize -= bytes;
             }
+            ChatRoom currentChatRoom = getCurrentChatRoom(roomId);
+            User currentUser = currentChatRoom.getUserById(userId);
+            broadCastMessage(filename + " uploaded by " + currentUser.getUsername(), true);
+            updateUploadedFile(filename);
+        }
+
+        private void updateUploadedFile(String filename) {
+            onlineClients.forEach((key, value) -> {
+                try {
+                    value.writeInt(ResponseType.UPLOAD.ordinal());
+                    value.writeUTF(filename);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            });
         }
 
         /**
