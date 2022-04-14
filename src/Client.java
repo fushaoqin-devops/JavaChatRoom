@@ -60,6 +60,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
     private DataInputStream dis = null;
     private Thread messageService = null;
     private String currentUserName = "";
+    private String roomId = "";
 
     public static void main(String[] args) {
         launch(args);
@@ -73,6 +74,11 @@ public class Client extends Application implements EventHandler<ActionEvent> {
     public void start(Stage _stage) {
         stage = _stage;
         stage.setOnCloseRequest((WindowEvent windowEvent) -> {
+            try {
+                saveUserInfo(roomId);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
             disconnectServer();
             System.exit(0);
         });
@@ -139,15 +145,17 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             Pair<String, String> prevSessionInfo = loadUserInfo();
             if (prevSessionInfo != null) {
                 // If temp user file exists, directly send user to chat room
-                doConnect(prevSessionInfo.getKey(), prevSessionInfo.getValue());
-                mainStage.setTitle("Chat Room - " + prevSessionInfo.getValue());
+                roomId = prevSessionInfo.getValue();
+                doConnect(prevSessionInfo.getKey(), roomId);
+                mainStage.setTitle("Chat Room - " + roomId);
             } else {
                 // If temp user file does not exist, prompt user for username and room id
                 LoginDialog loginDialog = new LoginDialog();
                 Optional<Pair<String, String>> result = loginDialog.showAndWait();
                 result.ifPresentOrElse((Pair<String, String> loginCredentials) -> {
-                    doConnect(loginCredentials.getKey(), loginCredentials.getValue());
-                    mainStage.setTitle("Chat Room - " + loginCredentials.getValue());
+                    roomId = loginCredentials.getValue();
+                    doConnect(loginCredentials.getKey(), roomId);
+                    mainStage.setTitle("Chat Room - " + roomId);
                 }, () -> System.exit(0));
             }
         });
@@ -221,15 +229,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
                 disconnectServer();
 
                 // Save username and room id in temp user file locally
-                File dir = new File("./TempUser");
-                if (!dir.exists()) {
-                    dir.mkdirs();
-                }
-                File tempUserFile = new File("./TempUser/CurrentUser.txt");
-                FileOutputStream tmpFileOutputStream = new FileOutputStream(tempUserFile, false);
-                DataOutputStream output = new DataOutputStream(tmpFileOutputStream);
-                output.writeUTF(currentUserName);
-                output.writeUTF(id);
+                saveUserInfo(id);
 
                 // Close current stage and initialize a new stage
                 ((Stage) scene.getWindow()).close();
@@ -240,6 +240,20 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         }, () -> {
             return;
         });
+    }
+
+    private void saveUserInfo(String id) throws IOException {
+        File dir = new File("./TempUser");
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        File tempUserFile = new File("./TempUser/CurrentUser.txt");
+        FileOutputStream tmpFileOutputStream = new FileOutputStream(tempUserFile, false);
+        DataOutputStream output = new DataOutputStream(tmpFileOutputStream);
+        output.writeUTF(currentUserName);
+        output.writeUTF(id);
+
+        output.close();
     }
 
     /**
@@ -255,6 +269,8 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             if (btnType == logoutButton) {
                 try {
                     dos.writeInt(RequestType.LOGOUT.ordinal());
+                    File tempUserFile = new File("./TempUser/CurrentUser.txt");
+                    tempUserFile.delete();
                     disconnectServer();
                     System.exit(0);
                 } catch (IOException e) {
