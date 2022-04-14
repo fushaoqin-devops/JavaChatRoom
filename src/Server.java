@@ -122,6 +122,8 @@ public class Server {
         Socket socket;
         String userId;
         String roomId;
+        DataInputStream dis;
+        DataOutputStream dos;
         ConcurrentHashMap<String, DataOutputStream> onlineClients;  // Keep the record of all online clients in the current room
 
         public ClientThread(Socket socket) {
@@ -134,8 +136,8 @@ public class Server {
                 String ip = socket.getInetAddress().getHostName();
                 System.out.println("Accepting connection from ip " + ip);
 
-                DataInputStream dis = new DataInputStream(socket.getInputStream());
-                DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
+                dis = new DataInputStream(socket.getInputStream());
+                dos = new DataOutputStream(socket.getOutputStream());
                 String username = dis.readUTF();
                 roomId = dis.readUTF();
 
@@ -178,6 +180,7 @@ public class Server {
                             broadCastMessage(username + ": " + message, false);
                             break;
                         case UPLOAD:
+                            uploadFile();
                             break;
                         case DOWNLOAD:
                             break;
@@ -195,6 +198,27 @@ public class Server {
             } catch (Exception ex) {
                 ex.printStackTrace();
                 interrupt();
+            }
+        }
+
+        private void uploadFile() throws IOException {
+            String filePath = "./Files/" + roomId;
+            File dir = new File(filePath);
+            if (!dir.exists()) {
+                dir.mkdirs();
+            }
+            String filename = dis.readUTF();
+            File file = new File(filePath + "/" + filename);
+            FileOutputStream fos = new FileOutputStream(file);
+            long fileSize = dis.readLong();
+            if (!(fileSize > 0)) {
+                return;
+            }
+            int bytes;
+            byte[] buffer = new byte[(int) fileSize];
+            while (fileSize > 0 && (bytes = dis.read(buffer, 0, (int) Math.min(buffer.length, fileSize))) != -1) {
+                fos.write(buffer, 0, bytes);
+                fileSize -= bytes;
             }
         }
 

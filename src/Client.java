@@ -8,6 +8,7 @@ import javafx.scene.input.KeyCode;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
+import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 import javafx.stage.WindowEvent;
 import javafx.util.Callback;
@@ -22,11 +23,12 @@ import java.util.function.Consumer;
 
 enum ResponseType {
     MESSAGE,
-    USERS;
+    USERS
 }
 
 /**
- * Client for sales associates to place orders and get total number of orders placed
+ * Client user interface for the chat room
+ * Support file transfer as well as message exchange
  *
  * @author Shaoqin Fu
  * @version 03/25/2022
@@ -35,7 +37,6 @@ public class Client extends Application implements EventHandler<ActionEvent> {
     private Stage stage;
     private Scene scene;
     private HBox root = new HBox(8);
-//    private VBox root = new VBox(8);
 
     // UI Components
     private MenuBar menuBar = new MenuBar();
@@ -52,8 +53,8 @@ public class Client extends Application implements EventHandler<ActionEvent> {
 
     // Other attributes
     public static final int SERVER_PORT = 8080;
-    public static final ResponseType[] RESPONSE_TYPES = ResponseType.values();  // All server response types
-    public static final Status[] STATUS_TYPES = Status.values();    // ONLINE/OFFLINE
+    protected static final ResponseType[] RESPONSE_TYPES = ResponseType.values();  // All server response types
+    protected static final Status[] STATUS_TYPES = Status.values();    // ONLINE/OFFLINE
     private Socket socket = null;
     private DataOutputStream dos = null;
     private DataInputStream dis = null;
@@ -95,7 +96,11 @@ public class Client extends Application implements EventHandler<ActionEvent> {
                 if (keyEvent.isShiftDown()) {
                     taInput.appendText("\n");
                 } else if (!taInput.getText().trim().equals("")) {
-                    handleSend();
+                    try {
+                        handleSend();
+                    } catch (IOException ioe) {
+                        alert(Alert.AlertType.ERROR, "ERROR", ioe + "");
+                    }
                 } else {
                     taInput.clear();
                 }
@@ -155,13 +160,10 @@ public class Client extends Application implements EventHandler<ActionEvent> {
      * @return pair of username and room id
      */
     private Pair<String, String> loadUserInfo() {
-        try {
-            File file = new File("./TempUser/CurrentUser.txt");
-            FileInputStream fis = new FileInputStream(file);
-            DataInputStream dis = new DataInputStream(fis);
-            String username = dis.readUTF();
-            String roomId = dis.readUTF();
-            return new Pair<String, String>(username, roomId);
+        try (DataInputStream outTmp = new DataInputStream(new FileInputStream(new File("./TempUser/CurrentUser.txt")))) {
+            String username = outTmp.readUTF();
+            String roomId = outTmp.readUTF();
+            return new Pair<>(username, roomId);
         } catch (IOException e) {
             return null;
         }
@@ -210,10 +212,8 @@ public class Client extends Application implements EventHandler<ActionEvent> {
 
     /**
      * Log out user from current room and start a session in new chat room
-     *
-     * @throws IOException
      */
-    private void handleChangeRoom() throws IOException {
+    private void handleChangeRoom() {
         showDialog("Do you want to join another room?", "Room ID: ", (String id) -> {
             try {
                 // Logout
@@ -233,9 +233,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
 
                 // Close current stage and initialize a new stage
                 ((Stage) scene.getWindow()).close();
-                Platform.runLater(() -> {
-                    new Client().start(new Stage());
-                });
+                Platform.runLater(() -> new Client().start(new Stage()));
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -253,7 +251,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         buttons.add(logoutButton);
         buttons.add(ButtonType.CANCEL);
 
-        showDialog("Logout", "Do you want to logout?", (btnType) -> {
+        showDialog("Logout", "Do you want to logout?", btnType -> {
             if (btnType == logoutButton) {
                 try {
                     dos.writeInt(RequestType.LOGOUT.ordinal());
@@ -266,8 +264,19 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         }, buttons);
     }
 
-    private void handleUpload() {
-        // TODO: upload file to server
+    private void handleUpload() throws IOException {
+        FileChooser fileChooser = new FileChooser();
+        File file = fileChooser.showOpenDialog(stage);
+        if (file == null) return;
+        dos.writeInt(RequestType.UPLOAD.ordinal());
+        dos.writeUTF(file.getName());
+        dos.writeLong(file.length());
+        FileInputStream fis = new FileInputStream(file);
+        int bytes;
+        byte[] buffer = new byte[(int) file.length()];
+        while ((bytes = fis.read(buffer, 0, buffer.length)) > 0) {
+            dos.write(buffer, 0, bytes);
+        }
     }
 
     private void handleDownload() {
@@ -276,18 +285,15 @@ public class Client extends Application implements EventHandler<ActionEvent> {
 
     /**
      * Send message to current chat room
+     *
+     * @throws IOException
      */
-    private void handleSend() {
-        try {
-            String message = taInput.getText().trim();
-            dos.writeInt(RequestType.MESSAGE.ordinal());
-            dos.writeUTF(message);
-            dos.flush();
-            taInput.clear();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
+    private void handleSend() throws IOException {
+        String message = taInput.getText().trim();
+        dos.writeInt(RequestType.MESSAGE.ordinal());
+        dos.writeUTF(message);
+        dos.flush();
+        taInput.clear();
     }
 
     /**
@@ -428,11 +434,14 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         private void loadUsersInChatRoom() throws IOException {
             String username = dis.readUTF();
             Status status = STATUS_TYPES[dis.readInt()];
+            System.out.println(username);
+            System.out.println(status);
 
             Platform.runLater(() -> {
-                Pair<String, Status> user = new Pair(username, status);
+                Pair<String, Status> user = new Pair<String, Status>(username, status);
                 // Check if user already in list view
-                int idx = listViewUsers.getItems().indexOf(new Pair(username, STATUS_TYPES[1 - status.ordinal()]));
+                int idx = listViewUsers.getItems().indexOf(new Pair<String, Status>(username, STATUS_TYPES[1 - status.ordinal()]));
+                System.out.println(idx);
                 if (idx == -1) {
                     listViewUsers.getItems().add(user);
                 } else {
