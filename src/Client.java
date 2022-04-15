@@ -1,13 +1,19 @@
 import javafx.application.Application;
 import javafx.application.Platform;
+import javafx.beans.value.ChangeListener;
+import javafx.beans.value.ObservableValue;
+import javafx.collections.ObservableList;
 import javafx.event.ActionEvent;
 import javafx.event.EventHandler;
+import javafx.geometry.Insets;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.input.KeyCode;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
+import javafx.stage.DirectoryChooser;
+import javafx.stage.FileChooser;
 import javafx.stage.Stage;
 import javafx.stage.WindowEvent;
 import javafx.util.Callback;
@@ -15,18 +21,21 @@ import javafx.util.Pair;
 
 import java.io.*;
 import java.net.Socket;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.Optional;
+import java.net.SocketException;
+import java.util.*;
 import java.util.function.Consumer;
 
 enum ResponseType {
     MESSAGE,
-    USERS;
+    USERS,
+    FILES,
+    UPLOAD,
+    DOWNLOAD
 }
 
 /**
- * Client for sales associates to place orders and get total number of orders placed
+ * Client user interface for the chat room
+ * Support file transfer as well as message exchange
  *
  * @author Shaoqin Fu
  * @version 03/25/2022
@@ -34,8 +43,7 @@ enum ResponseType {
 public class Client extends Application implements EventHandler<ActionEvent> {
     private Stage stage;
     private Scene scene;
-    private HBox root = new HBox(8);
-//    private VBox root = new VBox(8);
+    private HBox root = new HBox();
 
     // UI Components
     private MenuBar menuBar = new MenuBar();
@@ -52,13 +60,16 @@ public class Client extends Application implements EventHandler<ActionEvent> {
 
     // Other attributes
     public static final int SERVER_PORT = 8080;
-    public static final ResponseType[] RESPONSE_TYPES = ResponseType.values();  // All server response types
-    public static final Status[] STATUS_TYPES = Status.values();    // ONLINE/OFFLINE
+    protected static final ResponseType[] RESPONSE_TYPES = ResponseType.values();  // All server response types
+    protected static final Status[] STATUS_TYPES = Status.values();    // ONLINE/OFFLINE
     private Socket socket = null;
     private DataOutputStream dos = null;
     private DataInputStream dis = null;
     private Thread messageService = null;
     private String currentUserName = "";
+    private String roomId = "";
+    private ArrayList<String> fileList = null;
+    private Boolean loaded = false;
 
     public static void main(String[] args) {
         launch(args);
@@ -72,6 +83,11 @@ public class Client extends Application implements EventHandler<ActionEvent> {
     public void start(Stage _stage) {
         stage = _stage;
         stage.setOnCloseRequest((WindowEvent windowEvent) -> {
+            try {
+                saveUserInfo(roomId);
+            } catch (IOException ioe) {
+                alert(Alert.AlertType.ERROR, "ERROR", ioe + "");
+            }
             disconnectServer();
             System.exit(0);
         });
@@ -87,7 +103,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
 
         // User input section
         FlowPane fpBot = new FlowPane(8, 8);
-        taInput.setPrefColumnCount(30);
+        taInput.setPrefColumnCount(38);
         taInput.setPrefRowCount(3);
         taInput.setOnKeyPressed(keyEvent -> {
             // Enter key press will send the message, Shift + Enter will start on new line
@@ -95,7 +111,11 @@ public class Client extends Application implements EventHandler<ActionEvent> {
                 if (keyEvent.isShiftDown()) {
                     taInput.appendText("\n");
                 } else if (!taInput.getText().trim().equals("")) {
-                    handleSend();
+                    try {
+                        handleSend();
+                    } catch (IOException ioe) {
+                        alert(Alert.AlertType.ERROR, "ERROR", ioe + "");
+                    }
                 } else {
                     taInput.clear();
                 }
@@ -106,12 +126,15 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         // Button is disabled if no input
         taInput.textProperty().addListener((observable, oldValue, newValue) -> btnSend.setDisable(newValue.trim().length() == 0));
         fpBot.getChildren().addAll(taInput, btnSend);
+        FlowPane.setMargin(taInput, new Insets(8, 0, 0, 0));
 
         btnSend.setOnAction(this);
 
         // Chat room's chat section
-        VBox chatSection = new VBox(8);
+        VBox chatSection = new VBox();
         taChat.setEditable(false);
+        taChat.setPrefColumnCount(80);
+        taChat.setPrefRowCount(80);
         taChat.setStyle("-fx-font-family: monospace; -fx-opacity: 1.0");
         chatSection.getChildren().addAll(menuBar, taChat, fpBot);
 
@@ -125,7 +148,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
 
 
         root.getChildren().addAll(chatSection, listViewUsers);
-        scene = new Scene(root, 500, 300);
+        scene = new Scene(root, 700, 500);
         stage.setScene(scene);
         final Stage mainStage = stage;
 
@@ -134,18 +157,21 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             Pair<String, String> prevSessionInfo = loadUserInfo();
             if (prevSessionInfo != null) {
                 // If temp user file exists, directly send user to chat room
-                doConnect(prevSessionInfo.getKey(), prevSessionInfo.getValue());
-                mainStage.setTitle("Chat Room - " + prevSessionInfo.getValue());
+                roomId = prevSessionInfo.getValue();
+                doConnect(prevSessionInfo.getKey(), roomId);
+                mainStage.setTitle("Chat Room - " + roomId);
             } else {
                 // If temp user file does not exist, prompt user for username and room id
                 LoginDialog loginDialog = new LoginDialog();
                 Optional<Pair<String, String>> result = loginDialog.showAndWait();
                 result.ifPresentOrElse((Pair<String, String> loginCredentials) -> {
-                    doConnect(loginCredentials.getKey(), loginCredentials.getValue());
-                    mainStage.setTitle("Chat Room - " + loginCredentials.getValue());
+                    roomId = loginCredentials.getValue();
+                    doConnect(loginCredentials.getKey(), roomId);
+                    mainStage.setTitle("Chat Room - " + roomId);
                 }, () -> System.exit(0));
             }
         });
+        taInput.requestFocus();
         stage.show();
     }
 
@@ -155,13 +181,10 @@ public class Client extends Application implements EventHandler<ActionEvent> {
      * @return pair of username and room id
      */
     private Pair<String, String> loadUserInfo() {
-        try {
-            File file = new File("./TempUser/CurrentUser.txt");
-            FileInputStream fis = new FileInputStream(file);
-            DataInputStream dis = new DataInputStream(fis);
-            String username = dis.readUTF();
-            String roomId = dis.readUTF();
-            return new Pair<String, String>(username, roomId);
+        try (DataInputStream outTmp = new DataInputStream(new FileInputStream(new File("./TempUser/CurrentUser.txt")))) {
+            String username = outTmp.readUTF();
+            String roomId = outTmp.readUTF();
+            return new Pair<>(username, roomId);
         } catch (IOException e) {
             return null;
         }
@@ -210,10 +233,8 @@ public class Client extends Application implements EventHandler<ActionEvent> {
 
     /**
      * Log out user from current room and start a session in new chat room
-     *
-     * @throws IOException
      */
-    private void handleChangeRoom() throws IOException {
+    private void handleChangeRoom() {
         showDialog("Do you want to join another room?", "Room ID: ", (String id) -> {
             try {
                 // Logout
@@ -221,27 +242,36 @@ public class Client extends Application implements EventHandler<ActionEvent> {
                 disconnectServer();
 
                 // Save username and room id in temp user file locally
-                File dir = new File("./TempUser");
-                if (!dir.exists()) {
-                    dir.mkdirs();
-                }
-                File tempUserFile = new File("./TempUser/CurrentUser.txt");
-                FileOutputStream tmpFileOutputStream = new FileOutputStream(tempUserFile, false);
-                DataOutputStream output = new DataOutputStream(tmpFileOutputStream);
-                output.writeUTF(currentUserName);
-                output.writeUTF(id);
+                saveUserInfo(id);
 
                 // Close current stage and initialize a new stage
                 ((Stage) scene.getWindow()).close();
-                Platform.runLater(() -> {
-                    new Client().start(new Stage());
-                });
-            } catch (IOException e) {
-                e.printStackTrace();
+                Platform.runLater(() -> new Client().start(new Stage()));
+            } catch (IOException ioe) {
+                alert(Alert.AlertType.ERROR, "ERROR", ioe.getMessage());
             }
         }, () -> {
             return;
         });
+    }
+
+    /**
+     * Persist user info between room change and window close
+     *
+     * @param roomId room id that needs to be persisted
+     * @throws IOException
+     */
+    private void saveUserInfo(String roomId) throws IOException {
+        File dir = new File("./TempUser");
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        File tempUserFile = new File("./TempUser/CurrentUser.txt");
+        FileOutputStream tmpFileOutputStream = new FileOutputStream(tempUserFile, false);
+        DataOutputStream output = new DataOutputStream(tmpFileOutputStream);
+        output.writeUTF(currentUserName);
+        output.writeUTF(roomId);
+        output.close();
     }
 
     /**
@@ -253,41 +283,145 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         buttons.add(logoutButton);
         buttons.add(ButtonType.CANCEL);
 
-        showDialog("Logout", "Do you want to logout?", (btnType) -> {
+        showDialog("Logout", "Do you want to logout?", btnType -> {
             if (btnType == logoutButton) {
                 try {
+                    // Delete temp user file on logout
                     dos.writeInt(RequestType.LOGOUT.ordinal());
+                    File tempUserFile = new File("./TempUser/CurrentUser.txt");
+                    tempUserFile.delete();
                     disconnectServer();
                     System.exit(0);
-                } catch (IOException e) {
-                    e.printStackTrace();
+                } catch (IOException ioe) {
+                    alert(Alert.AlertType.ERROR, "ERROR", ioe.getMessage());
                 }
             }
         }, buttons);
     }
 
-    private void handleUpload() {
-        // TODO: upload file to server
+    /**
+     * Upload a single file or multiple files to server
+     *
+     * @throws IOException
+     */
+    private void handleUpload() throws IOException {
+        FileChooser fileChooser = new FileChooser();
+        List<File> files = fileChooser.showOpenMultipleDialog(stage);
+        if (files != null) {
+            for (File file : files) {
+                uploadFileToServer(file);
+            }
+        }
     }
 
-    private void handleDownload() {
-        // TODO: download file from server
+    /**
+     * Upload a file to server with buffer
+     *
+     * @param file file being uploaded
+     * @throws IOException
+     */
+    private void uploadFileToServer(File file) throws IOException {
+        dos.writeInt(RequestType.UPLOAD.ordinal());
+        dos.writeUTF(file.getName());
+        dos.writeLong(file.length());
+        FileInputStream fis = new FileInputStream(file);
+        int bytes;
+        byte[] buffer = new byte[(int) file.length()];
+        while ((bytes = fis.read(buffer, 0, buffer.length)) > 0) {
+            dos.write(buffer, 0, bytes);
+        }
+        fis.close();
+        dos.flush();
+    }
+
+    /**
+     * Get all files uploaded to server, download selected files to user selected folder
+     *
+     * @throws IOException
+     */
+    private void handleDownload() throws IOException {
+        // On first interaction, get all files and load to list
+        if (fileList == null) {
+            dos.writeInt(RequestType.FILES.ordinal());
+        }
+        while (!loaded) {
+            // Wait for server to load file list
+        }
+
+        // Display of all files
+        ListView<String> listViewFiles = new ListView<String>();
+        for (String filename : fileList) {
+            listViewFiles.getItems().add(filename);
+        }
+        listViewFiles.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE); // Support multi-select for downloading multiple files
+        Dialog files = new Dialog();
+        files.setHeaderText("File on chat room server");
+        files.getDialogPane().setContent(listViewFiles);
+        ButtonType downloadButtonType = new ButtonType("Download");
+        files.getDialogPane().getButtonTypes().addAll(downloadButtonType, ButtonType.CANCEL);
+        Button btnDownload = (Button) files.getDialogPane().lookupButton(downloadButtonType);
+        btnDownload.setDisable(true);
+        // Disable download button if no file selected
+        listViewFiles.getSelectionModel().selectedItemProperty().addListener(new ChangeListener<String>() {
+            @Override
+            public void changed(ObservableValue<? extends String> observableValue, String s, String t1) {
+                if (listViewFiles.getSelectionModel().getSelectedItems().size() == 0) {
+                    btnDownload.setDisable(true);
+                } else {
+                    btnDownload.setDisable(false);
+                }
+            }
+        });
+        files.setResultConverter(dialogButton -> {
+            if (dialogButton == downloadButtonType) {
+                return listViewFiles.getSelectionModel().getSelectedItems();
+            }
+            return null;
+        });
+        Optional<ObservableList<String>> result = files.showAndWait();
+        result.ifPresent(new Consumer<ObservableList<String>>() {
+            @Override
+            public void accept(ObservableList<String> list) {
+                DirectoryChooser dc = new DirectoryChooser();
+                File dir = dc.showDialog(stage);
+                if (dir != null) {
+                    for (String filename : list) {
+                        try {
+                            downloadFileFromServer(filename, dir.getAbsolutePath());
+                        } catch (IOException ioe) {
+                            alert(Alert.AlertType.ERROR, "ERROR", ioe.getMessage());
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /**
+     * Notify server download request
+     *
+     * @param filename name of file on server
+     * @param path     user selected destination path
+     * @throws IOException
+     */
+    private void downloadFileFromServer(String filename, String path) throws IOException {
+        dos.writeInt(RequestType.DOWNLOAD.ordinal());
+        dos.writeUTF(filename);
+        dos.writeUTF(path);
+        dos.flush();
     }
 
     /**
      * Send message to current chat room
+     *
+     * @throws IOException
      */
-    private void handleSend() {
-        try {
-            String message = taInput.getText().trim();
-            dos.writeInt(RequestType.MESSAGE.ordinal());
-            dos.writeUTF(message);
-            dos.flush();
-            taInput.clear();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-
+    private void handleSend() throws IOException {
+        String message = taInput.getText().trim();
+        dos.writeInt(RequestType.MESSAGE.ordinal());
+        dos.writeUTF(message);
+        dos.flush();
+        taInput.clear();
     }
 
     /**
@@ -300,7 +434,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             dos.close();
             socket.close();
         } catch (Exception e) {
-            alert(Alert.AlertType.ERROR, "Error", e + "\n");
+            alert(Alert.AlertType.ERROR, "Error", e.getMessage());
         }
     }
 
@@ -320,8 +454,9 @@ public class Client extends Application implements EventHandler<ActionEvent> {
 
             // Broadcast user login to all online clients
             dos.writeInt(RequestType.USERS.ordinal());
+            dos.flush();
         } catch (IOException ioe) {
-            alert(Alert.AlertType.ERROR, "Server Unavailable", ioe + "");
+            alert(Alert.AlertType.ERROR, "Server Unavailable", ioe.getMessage());
             System.exit(0);
         }
     }
@@ -329,8 +464,9 @@ public class Client extends Application implements EventHandler<ActionEvent> {
     /**
      * Utility function for showing alert message
      *
-     * @param type alert type
-     * @param msg  alert message
+     * @param type   alert type
+     * @param header header text
+     * @param msg    alert message
      */
     private void alert(Alert.AlertType type, String header, String msg) {
         Alert alert = new Alert(type, msg);
@@ -393,6 +529,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             while (!Thread.currentThread().isInterrupted()) {
                 try {
                     int method = dis.readInt();
+                    System.out.println(method);
                     if (method < 0 || method >= RESPONSE_TYPES.length) {
                         System.out.println("Invalid response type");
                         System.exit(0);
@@ -407,6 +544,15 @@ public class Client extends Application implements EventHandler<ActionEvent> {
                         case USERS:
                             loadUsersInChatRoom();
                             break;
+                        case FILES:
+                            populateFileList();
+                            break;
+                        case UPLOAD:
+                            updateFileList();
+                            break;
+                        case DOWNLOAD:
+                            downloadFile();
+                            break;
                         default:
                             System.out.println("Unknown response type received");
                             break;
@@ -414,10 +560,70 @@ public class Client extends Application implements EventHandler<ActionEvent> {
                 } catch (EOFException eof) {
                     log("Server disconnected.");
                     Thread.currentThread().interrupt();
-                } catch (IOException e) {
-                    e.printStackTrace();
+                } catch (SocketException se) {
+                    System.out.println(se.getMessage());
+                } catch (Exception e) {
+                    String methodName = e.getStackTrace()[0].getMethodName();
+                    alert(Alert.AlertType.ERROR, "Error", "Error invoking " + methodName + ": " + e.getMessage());
                 }
             }
+        }
+
+        /**
+         * Wrapper for alert function to run in thread
+         *
+         * @param type   alert type
+         * @param header header text
+         * @param msg    alert message
+         */
+        private void alertLater(Alert.AlertType type, String header, String msg) {
+            Platform.runLater(() -> {
+                alert(type, header, msg);
+            });
+        }
+
+        /**
+         * Handle download response
+         *
+         * @throws IOException
+         */
+        private void downloadFile() throws IOException {
+            long fileSize = dis.readLong();
+            String filePath = dis.readUTF();
+            File file = new File(filePath);
+            FileOutputStream fos = new FileOutputStream(file);
+            if (!(fileSize > 0)) {
+                return;
+            }
+            int bytes;
+            byte[] buffer = new byte[(int) fileSize];
+            while (fileSize > 0 && (bytes = dis.read(buffer, 0, (int) Math.min(buffer.length, fileSize))) != -1) {
+                fos.write(buffer, 0, bytes);
+                fileSize -= bytes;
+            }
+        }
+
+        /**
+         * On new file uploaded, update file list
+         *
+         * @throws IOException
+         */
+        private void updateFileList() throws IOException {
+            String filename = dis.readUTF();
+            if (fileList != null) {
+                fileList.add(filename); // TODO: use vector or lock
+            }
+        }
+
+        /**
+         * On initialization, populate file list
+         *
+         * @throws IOException
+         */
+        private void populateFileList() throws IOException {
+            String[] filenames = dis.readUTF().split(",");
+            fileList = new ArrayList<>(Arrays.asList(filenames));
+            loaded = true;
         }
 
         /**
@@ -430,9 +636,9 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             Status status = STATUS_TYPES[dis.readInt()];
 
             Platform.runLater(() -> {
-                Pair<String, Status> user = new Pair(username, status);
+                Pair<String, Status> user = new Pair<String, Status>(username, status);
                 // Check if user already in list view
-                int idx = listViewUsers.getItems().indexOf(new Pair(username, STATUS_TYPES[1 - status.ordinal()]));
+                int idx = listViewUsers.getItems().indexOf(new Pair<String, Status>(username, STATUS_TYPES[1 - status.ordinal()]));
                 if (idx == -1) {
                     listViewUsers.getItems().add(user);
                 } else {
@@ -455,7 +661,11 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             });
         }
 
-        // Print message in chat
+        /**
+         * Print message in chat section
+         *
+         * @param message chat message
+         */
         private void log(String message) {
             Platform.runLater(() -> taChat.appendText(message + "\n"));
         }

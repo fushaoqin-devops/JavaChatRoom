@@ -1,6 +1,7 @@
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.sql.Timestamp;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -11,6 +12,7 @@ enum RequestType {
     MESSAGE,
     UPLOAD,
     DOWNLOAD,
+    FILES,
     LOGOUT,
     USERS;
 }
@@ -122,6 +124,8 @@ public class Server {
         Socket socket;
         String userId;
         String roomId;
+        DataInputStream dis;
+        DataOutputStream dos;
         ConcurrentHashMap<String, DataOutputStream> onlineClients;  // Keep the record of all online clients in the current room
 
         public ClientThread(Socket socket) {
@@ -134,8 +138,8 @@ public class Server {
                 String ip = socket.getInetAddress().getHostName();
                 System.out.println("Accepting connection from ip " + ip);
 
-                DataInputStream dis = new DataInputStream(socket.getInputStream());
-                DataOutputStream dos = new DataOutputStream(socket.getOutputStream());
+                dis = new DataInputStream(socket.getInputStream());
+                dos = new DataOutputStream(socket.getOutputStream());
                 String username = dis.readUTF();
                 roomId = dis.readUTF();
 
@@ -174,12 +178,16 @@ public class Server {
                     RequestType requestType = REQUEST_TYPES[method];
                     switch (requestType) {
                         case MESSAGE:
-                            String message = dis.readUTF();
-                            broadCastMessage(username + ": " + message, false);
+                            sendMessage(username);
                             break;
                         case UPLOAD:
+                            uploadFile();
+                            break;
+                        case FILES:
+                            getAllFiles();
                             break;
                         case DOWNLOAD:
+                            downloadFile();
                             break;
                         case LOGOUT:
                             logoutUser();
@@ -196,6 +204,106 @@ public class Server {
                 ex.printStackTrace();
                 interrupt();
             }
+        }
+
+        /**
+         * Send chat messages to all online clients
+         *
+         * @param username current username
+         * @throws IOException
+         */
+        private void sendMessage(String username) throws IOException {
+            String message = dis.readUTF();
+            broadCastMessage(username + ": " + message, false);
+        }
+
+        /**
+         * Send file to client for download
+         *
+         * @throws IOException
+         */
+        private void downloadFile() throws IOException {
+            String filename = dis.readUTF();
+            String path = dis.readUTF();
+            File file = new File("./Files/" + roomId + "/" + filename);
+
+            dos.writeInt(ResponseType.DOWNLOAD.ordinal());
+            dos.writeLong(file.length());
+            dos.writeUTF(path + "/" + filename);
+            FileInputStream fis = new FileInputStream(file);
+            int bytes;
+            byte[] buffer = new byte[(int) file.length()];
+            while ((bytes = fis.read(buffer, 0, buffer.length)) > 0) {
+                dos.write(buffer, 0, bytes);
+            }
+            dos.writeInt(ResponseType.MESSAGE.ordinal());
+            dos.writeUTF(filename + " downloaded successfully");
+        }
+
+        /**
+         * Get all files inside current chat room
+         *
+         * @throws IOException
+         */
+        private void getAllFiles() throws IOException {
+            ChatRoom currentChatRoom = getCurrentChatRoom(roomId);
+            File folder = new File("./Files/" + roomId);
+            if (!folder.exists()) {
+                folder.mkdirs();
+            }
+            StringBuilder filenames = new StringBuilder();
+            File[] files = folder.listFiles();
+            for (File f : files) {
+                filenames.append(filenames.isEmpty() ? f.getName() : "," + f.getName());
+            }
+            dos.writeInt(ResponseType.FILES.ordinal());
+            dos.writeUTF(filenames.toString());
+        }
+
+        /**
+         * Receive file from client and download to server folder
+         *
+         * @throws IOException
+         */
+        private void uploadFile() throws IOException {
+            String filePath = "./Files/" + roomId;
+            File dir = new File(filePath);
+            if (!dir.exists()) {
+                dir.mkdirs();
+            }
+            String filename = dis.readUTF();
+            File file = new File(filePath + "/" + filename);
+            FileOutputStream fos = new FileOutputStream(file);
+            long fileSize = dis.readLong();
+            if (!(fileSize > 0)) {
+                return;
+            }
+            int bytes;
+            byte[] buffer = new byte[(int) fileSize];
+            while (fileSize > 0 && (bytes = dis.read(buffer, 0, (int) Math.min(buffer.length, fileSize))) != -1) {
+                fos.write(buffer, 0, bytes);
+                fileSize -= bytes;
+            }
+            ChatRoom currentChatRoom = getCurrentChatRoom(roomId);
+            User currentUser = currentChatRoom.getUserById(userId);
+            broadCastMessage(filename + " uploaded by " + currentUser.getUsername(), true);
+            updateUploadedFile(filename);
+        }
+
+        /**
+         * Notify online clients of uploaded file
+         *
+         * @param filename uploaded file name
+         */
+        private void updateUploadedFile(String filename) {
+            onlineClients.forEach((key, value) -> {
+                try {
+                    value.writeInt(ResponseType.UPLOAD.ordinal());
+                    value.writeUTF(filename);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            });
         }
 
         /**
@@ -311,16 +419,18 @@ public class Server {
          */
         public void broadCastMessage(String message, Boolean isSystemMessage) throws IOException {
             ChatRoom currentChatRoom = getCurrentChatRoom(roomId);
+            Timestamp timestamp = new Timestamp(System.currentTimeMillis());
+            String messageWithTimeStamp = "[" + timestamp + "] " + message;
 
             // Do not save system messages in chat room history
             if (!isSystemMessage) {
-                currentChatRoom.addChatHistory(message);
+                currentChatRoom.addChatHistory(messageWithTimeStamp);
             }
 
             // Send message to all online clients in this chat room
             for (DataOutputStream client : onlineClients.values()) {
                 client.writeInt(ResponseType.MESSAGE.ordinal());
-                client.writeUTF(message);
+                client.writeUTF(isSystemMessage ? message : messageWithTimeStamp);
             }
 
             // Update local chat room object
