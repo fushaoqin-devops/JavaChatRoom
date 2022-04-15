@@ -206,11 +206,22 @@ public class Server {
             }
         }
 
+        /**
+         * Send chat messages to all online clients
+         *
+         * @param username current username
+         * @throws IOException
+         */
         private void sendMessage(String username) throws IOException {
             String message = dis.readUTF();
             broadCastMessage(username + ": " + message, false);
         }
 
+        /**
+         * Send file to client for download
+         *
+         * @throws IOException
+         */
         private void downloadFile() throws IOException {
             String filename = dis.readUTF();
             String path = dis.readUTF();
@@ -229,6 +240,11 @@ public class Server {
             dos.writeUTF(filename + " downloaded successfully");
         }
 
+        /**
+         * Get all files inside current chat room
+         *
+         * @throws IOException
+         */
         private void getAllFiles() throws IOException {
             ChatRoom currentChatRoom = getCurrentChatRoom(roomId);
             File folder = new File("./Files/" + roomId);
@@ -244,6 +260,11 @@ public class Server {
             dos.writeUTF(filenames.toString());
         }
 
+        /**
+         * Receive file from client and download to server folder
+         *
+         * @throws IOException
+         */
         private void uploadFile() throws IOException {
             String filePath = "./Files/" + roomId;
             File dir = new File(filePath);
@@ -269,6 +290,11 @@ public class Server {
             updateUploadedFile(filename);
         }
 
+        /**
+         * Notify online clients of uploaded file
+         *
+         * @param filename uploaded file name
+         */
         private void updateUploadedFile(String filename) {
             onlineClients.forEach((key, value) -> {
                 try {
@@ -393,18 +419,17 @@ public class Server {
          */
         public void broadCastMessage(String message, Boolean isSystemMessage) throws IOException {
             ChatRoom currentChatRoom = getCurrentChatRoom(roomId);
+            Timestamp timestamp = new Timestamp(System.currentTimeMillis());
+            String messageWithTimeStamp = "[" + timestamp + "] " + message;
 
             // Do not save system messages in chat room history
             if (!isSystemMessage) {
-                currentChatRoom.addChatHistory(message);
+                currentChatRoom.addChatHistory(messageWithTimeStamp);
             }
-
-            Timestamp timestamp = new Timestamp(System.currentTimeMillis());
 
             // Send message to all online clients in this chat room
             for (DataOutputStream client : onlineClients.values()) {
                 client.writeInt(ResponseType.MESSAGE.ordinal());
-                String messageWithTimeStamp = "[" + timestamp + "] " + message;
                 client.writeUTF(isSystemMessage ? message : messageWithTimeStamp);
             }
 

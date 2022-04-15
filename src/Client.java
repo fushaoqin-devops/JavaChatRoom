@@ -271,7 +271,6 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         DataOutputStream output = new DataOutputStream(tmpFileOutputStream);
         output.writeUTF(currentUserName);
         output.writeUTF(roomId);
-
         output.close();
     }
 
@@ -308,9 +307,10 @@ public class Client extends Application implements EventHandler<ActionEvent> {
     private void handleUpload() throws IOException {
         FileChooser fileChooser = new FileChooser();
         List<File> files = fileChooser.showOpenMultipleDialog(stage);
-        if (files == null) return;
-        for (File file : files) {
-            uploadFileToServer(file);
+        if (files != null) {
+            for (File file : files) {
+                uploadFileToServer(file);
+            }
         }
     }
 
@@ -389,7 +389,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
                         try {
                             downloadFileFromServer(filename, dir.getAbsolutePath());
                         } catch (IOException ioe) {
-                            ioe.printStackTrace();
+                            alert(Alert.AlertType.ERROR, "ERROR", ioe.getMessage());
                         }
                     }
                 }
@@ -397,10 +397,18 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         });
     }
 
+    /**
+     * Notify server download request
+     *
+     * @param filename name of file on server
+     * @param path     user selected destination path
+     * @throws IOException
+     */
     private void downloadFileFromServer(String filename, String path) throws IOException {
         dos.writeInt(RequestType.DOWNLOAD.ordinal());
         dos.writeUTF(filename);
         dos.writeUTF(path);
+        dos.flush();
     }
 
     /**
@@ -446,6 +454,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
 
             // Broadcast user login to all online clients
             dos.writeInt(RequestType.USERS.ordinal());
+            dos.flush();
         } catch (IOException ioe) {
             alert(Alert.AlertType.ERROR, "Server Unavailable", ioe.getMessage());
             System.exit(0);
@@ -455,8 +464,9 @@ public class Client extends Application implements EventHandler<ActionEvent> {
     /**
      * Utility function for showing alert message
      *
-     * @param type alert type
-     * @param msg  alert message
+     * @param type   alert type
+     * @param header header text
+     * @param msg    alert message
      */
     private void alert(Alert.AlertType type, String header, String msg) {
         Alert alert = new Alert(type, msg);
@@ -559,6 +569,24 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             }
         }
 
+        /**
+         * Wrapper for alert function to run in thread
+         *
+         * @param type   alert type
+         * @param header header text
+         * @param msg    alert message
+         */
+        private void alertLater(Alert.AlertType type, String header, String msg) {
+            Platform.runLater(() -> {
+                alert(type, header, msg);
+            });
+        }
+
+        /**
+         * Handle download response
+         *
+         * @throws IOException
+         */
         private void downloadFile() throws IOException {
             long fileSize = dis.readLong();
             String filePath = dis.readUTF();
@@ -575,6 +603,11 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             }
         }
 
+        /**
+         * On new file uploaded, update file list
+         *
+         * @throws IOException
+         */
         private void updateFileList() throws IOException {
             String filename = dis.readUTF();
             if (fileList != null) {
@@ -582,6 +615,11 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             }
         }
 
+        /**
+         * On initialization, populate file list
+         *
+         * @throws IOException
+         */
         private void populateFileList() throws IOException {
             String[] filenames = dis.readUTF().split(",");
             fileList = new ArrayList<>(Arrays.asList(filenames));
@@ -623,7 +661,11 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             });
         }
 
-        // Print message in chat
+        /**
+         * Print message in chat section
+         *
+         * @param message chat message
+         */
         private void log(String message) {
             Platform.runLater(() -> taChat.appendText(message + "\n"));
         }
