@@ -1,6 +1,7 @@
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.sql.Timestamp;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -177,8 +178,7 @@ public class Server {
                     RequestType requestType = REQUEST_TYPES[method];
                     switch (requestType) {
                         case MESSAGE:
-                            String message = dis.readUTF();
-                            broadCastMessage(username + ": " + message, false);
+                            sendMessage(username);
                             break;
                         case UPLOAD:
                             uploadFile();
@@ -204,6 +204,11 @@ public class Server {
                 ex.printStackTrace();
                 interrupt();
             }
+        }
+
+        private void sendMessage(String username) throws IOException {
+            String message = dis.readUTF();
+            broadCastMessage(username + ": " + message, false);
         }
 
         private void downloadFile() throws IOException {
@@ -394,10 +399,13 @@ public class Server {
                 currentChatRoom.addChatHistory(message);
             }
 
+            Timestamp timestamp = new Timestamp(System.currentTimeMillis());
+
             // Send message to all online clients in this chat room
             for (DataOutputStream client : onlineClients.values()) {
                 client.writeInt(ResponseType.MESSAGE.ordinal());
-                client.writeUTF(message);
+                String messageWithTimeStamp = "[" + timestamp + "] " + message;
+                client.writeUTF(isSystemMessage ? message : messageWithTimeStamp);
             }
 
             // Update local chat room object
