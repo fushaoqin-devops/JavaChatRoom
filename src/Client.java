@@ -5,6 +5,7 @@ import javafx.beans.value.ObservableValue;
 import javafx.collections.ObservableList;
 import javafx.event.ActionEvent;
 import javafx.event.EventHandler;
+import javafx.geometry.Insets;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.input.KeyCode;
@@ -20,10 +21,8 @@ import javafx.util.Pair;
 
 import java.io.*;
 import java.net.Socket;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.Optional;
+import java.net.SocketException;
+import java.util.*;
 import java.util.function.Consumer;
 
 enum ResponseType {
@@ -44,7 +43,7 @@ enum ResponseType {
 public class Client extends Application implements EventHandler<ActionEvent> {
     private Stage stage;
     private Scene scene;
-    private HBox root = new HBox(8);
+    private HBox root = new HBox();
 
     // UI Components
     private MenuBar menuBar = new MenuBar();
@@ -86,8 +85,8 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         stage.setOnCloseRequest((WindowEvent windowEvent) -> {
             try {
                 saveUserInfo(roomId);
-            } catch (IOException e) {
-                e.printStackTrace();
+            } catch (IOException ioe) {
+                alert(Alert.AlertType.ERROR, "ERROR", ioe + "");
             }
             disconnectServer();
             System.exit(0);
@@ -104,7 +103,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
 
         // User input section
         FlowPane fpBot = new FlowPane(8, 8);
-        taInput.setPrefColumnCount(30);
+        taInput.setPrefColumnCount(38);
         taInput.setPrefRowCount(3);
         taInput.setOnKeyPressed(keyEvent -> {
             // Enter key press will send the message, Shift + Enter will start on new line
@@ -127,12 +126,15 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         // Button is disabled if no input
         taInput.textProperty().addListener((observable, oldValue, newValue) -> btnSend.setDisable(newValue.trim().length() == 0));
         fpBot.getChildren().addAll(taInput, btnSend);
+        FlowPane.setMargin(taInput, new Insets(8, 0, 0, 0));
 
         btnSend.setOnAction(this);
 
         // Chat room's chat section
-        VBox chatSection = new VBox(8);
+        VBox chatSection = new VBox();
         taChat.setEditable(false);
+        taChat.setPrefColumnCount(80);
+        taChat.setPrefRowCount(80);
         taChat.setStyle("-fx-font-family: monospace; -fx-opacity: 1.0");
         chatSection.getChildren().addAll(menuBar, taChat, fpBot);
 
@@ -146,7 +148,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
 
 
         root.getChildren().addAll(chatSection, listViewUsers);
-        scene = new Scene(root, 500, 300);
+        scene = new Scene(root, 700, 500);
         stage.setScene(scene);
         final Stage mainStage = stage;
 
@@ -169,6 +171,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
                 }, () -> System.exit(0));
             }
         });
+        taInput.requestFocus();
         stage.show();
     }
 
@@ -244,15 +247,21 @@ public class Client extends Application implements EventHandler<ActionEvent> {
                 // Close current stage and initialize a new stage
                 ((Stage) scene.getWindow()).close();
                 Platform.runLater(() -> new Client().start(new Stage()));
-            } catch (IOException e) {
-                e.printStackTrace();
+            } catch (IOException ioe) {
+                alert(Alert.AlertType.ERROR, "ERROR", ioe.getMessage());
             }
         }, () -> {
             return;
         });
     }
 
-    private void saveUserInfo(String id) throws IOException {
+    /**
+     * Persist user info between room change and window close
+     *
+     * @param roomId room id that needs to be persisted
+     * @throws IOException
+     */
+    private void saveUserInfo(String roomId) throws IOException {
         File dir = new File("./TempUser");
         if (!dir.exists()) {
             dir.mkdirs();
@@ -261,7 +270,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         FileOutputStream tmpFileOutputStream = new FileOutputStream(tempUserFile, false);
         DataOutputStream output = new DataOutputStream(tmpFileOutputStream);
         output.writeUTF(currentUserName);
-        output.writeUTF(id);
+        output.writeUTF(roomId);
 
         output.close();
     }
@@ -278,22 +287,40 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         showDialog("Logout", "Do you want to logout?", btnType -> {
             if (btnType == logoutButton) {
                 try {
+                    // Delete temp user file on logout
                     dos.writeInt(RequestType.LOGOUT.ordinal());
                     File tempUserFile = new File("./TempUser/CurrentUser.txt");
                     tempUserFile.delete();
                     disconnectServer();
                     System.exit(0);
-                } catch (IOException e) {
-                    e.printStackTrace();
+                } catch (IOException ioe) {
+                    alert(Alert.AlertType.ERROR, "ERROR", ioe.getMessage());
                 }
             }
         }, buttons);
     }
 
+    /**
+     * Upload a single file or multiple files to server
+     *
+     * @throws IOException
+     */
     private void handleUpload() throws IOException {
         FileChooser fileChooser = new FileChooser();
-        File file = fileChooser.showOpenDialog(stage);
-        if (file == null) return;
+        List<File> files = fileChooser.showOpenMultipleDialog(stage);
+        if (files == null) return;
+        for (File file : files) {
+            uploadFileToServer(file);
+        }
+    }
+
+    /**
+     * Upload a file to server with buffer
+     *
+     * @param file file being uploaded
+     * @throws IOException
+     */
+    private void uploadFileToServer(File file) throws IOException {
         dos.writeInt(RequestType.UPLOAD.ordinal());
         dos.writeUTF(file.getName());
         dos.writeLong(file.length());
@@ -303,21 +330,30 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         while ((bytes = fis.read(buffer, 0, buffer.length)) > 0) {
             dos.write(buffer, 0, bytes);
         }
+        fis.close();
+        dos.flush();
     }
 
+    /**
+     * Get all files uploaded to server, download selected files to user selected folder
+     *
+     * @throws IOException
+     */
     private void handleDownload() throws IOException {
+        // On first interaction, get all files and load to list
         if (fileList == null) {
             dos.writeInt(RequestType.FILES.ordinal());
         }
         while (!loaded) {
-            System.out.println("loading");
+            // Wait for server to load file list
         }
+
+        // Display of all files
         ListView<String> listViewFiles = new ListView<String>();
         for (String filename : fileList) {
             listViewFiles.getItems().add(filename);
         }
-        listViewFiles.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
-
+        listViewFiles.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE); // Support multi-select for downloading multiple files
         Dialog files = new Dialog();
         files.setHeaderText("File on chat room server");
         files.getDialogPane().setContent(listViewFiles);
@@ -325,6 +361,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         files.getDialogPane().getButtonTypes().addAll(downloadButtonType, ButtonType.CANCEL);
         Button btnDownload = (Button) files.getDialogPane().lookupButton(downloadButtonType);
         btnDownload.setDisable(true);
+        // Disable download button if no file selected
         listViewFiles.getSelectionModel().selectedItemProperty().addListener(new ChangeListener<String>() {
             @Override
             public void changed(ObservableValue<? extends String> observableValue, String s, String t1) {
@@ -345,14 +382,15 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         result.ifPresent(new Consumer<ObservableList<String>>() {
             @Override
             public void accept(ObservableList<String> list) {
-                System.out.println(list.toString());
                 DirectoryChooser dc = new DirectoryChooser();
                 File dir = dc.showDialog(stage);
-                for (String filename : list) {
-                    try {
-                        downloadFileFromServer(filename, dir.getAbsolutePath());
-                    } catch (IOException ioe) {
-                        ioe.printStackTrace();
+                if (dir != null) {
+                    for (String filename : list) {
+                        try {
+                            downloadFileFromServer(filename, dir.getAbsolutePath());
+                        } catch (IOException ioe) {
+                            ioe.printStackTrace();
+                        }
                     }
                 }
             }
@@ -388,7 +426,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             dos.close();
             socket.close();
         } catch (Exception e) {
-            alert(Alert.AlertType.ERROR, "Error", e + "\n");
+            alert(Alert.AlertType.ERROR, "Error", e.getMessage());
         }
     }
 
@@ -409,7 +447,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             // Broadcast user login to all online clients
             dos.writeInt(RequestType.USERS.ordinal());
         } catch (IOException ioe) {
-            alert(Alert.AlertType.ERROR, "Server Unavailable", ioe + "");
+            alert(Alert.AlertType.ERROR, "Server Unavailable", ioe.getMessage());
             System.exit(0);
         }
     }
@@ -481,6 +519,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             while (!Thread.currentThread().isInterrupted()) {
                 try {
                     int method = dis.readInt();
+                    System.out.println(method);
                     if (method < 0 || method >= RESPONSE_TYPES.length) {
                         System.out.println("Invalid response type");
                         System.exit(0);
@@ -511,8 +550,11 @@ public class Client extends Application implements EventHandler<ActionEvent> {
                 } catch (EOFException eof) {
                     log("Server disconnected.");
                     Thread.currentThread().interrupt();
-                } catch (IOException e) {
-                    e.printStackTrace();
+                } catch (SocketException se) {
+                    System.out.println(se.getMessage());
+                } catch (Exception e) {
+                    String methodName = e.getStackTrace()[0].getMethodName();
+                    alert(Alert.AlertType.ERROR, "Error", "Error invoking " + methodName + ": " + e.getMessage());
                 }
             }
         }
@@ -534,8 +576,8 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         }
 
         private void updateFileList() throws IOException {
+            String filename = dis.readUTF();
             if (fileList != null) {
-                String filename = dis.readUTF();
                 fileList.add(filename); // TODO: use vector or lock
             }
         }
@@ -559,7 +601,6 @@ public class Client extends Application implements EventHandler<ActionEvent> {
                 Pair<String, Status> user = new Pair<String, Status>(username, status);
                 // Check if user already in list view
                 int idx = listViewUsers.getItems().indexOf(new Pair<String, Status>(username, STATUS_TYPES[1 - status.ordinal()]));
-                System.out.println(idx);
                 if (idx == -1) {
                     listViewUsers.getItems().add(user);
                 } else {
