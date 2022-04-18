@@ -407,6 +407,7 @@ public class Server {
             if (chatRooms.containsKey(roomId)) {
                 for (String message : chatRooms.get(roomId).getChatHistory()) {
                     if (message.contains("private message from @")) {
+                        // If it's a private message, send only to the recipient of the message
                         if (message.split("-")[0].equals(username)) {
                             client.writeInt(ResponseType.MESSAGE.ordinal());
                             client.writeUTF(message.substring(message.indexOf("-") + 1));
