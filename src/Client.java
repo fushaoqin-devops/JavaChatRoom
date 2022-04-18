@@ -158,10 +158,10 @@ public class Client extends Application implements EventHandler<ActionEvent> {
                     if (clickedUser != null) {
                         String tag = "@" + clickedUser + " ";
                         if (!taInput.getText().trim().startsWith(tag)) {
-                            taInput.appendText("@" + cell.getText() + " ");
+                            taInput.setText(tag + taInput.getText());
                         } else {
                             // Remove private message tag if clicked again
-                            String undoInput = taInput.getText().replace(tag, "");
+                            String undoInput = taInput.getText().replaceFirst(tag, "");
                             taInput.setText(undoInput);
                         }
                     }
