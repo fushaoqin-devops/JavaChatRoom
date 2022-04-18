@@ -6,16 +6,14 @@ import javafx.collections.ObservableList;
 import javafx.event.ActionEvent;
 import javafx.event.EventHandler;
 import javafx.geometry.Insets;
+import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.input.KeyCode;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
-import javafx.stage.DirectoryChooser;
-import javafx.stage.FileChooser;
-import javafx.stage.Stage;
-import javafx.stage.WindowEvent;
+import javafx.stage.*;
 import javafx.util.Callback;
 import javafx.util.Pair;
 
@@ -30,7 +28,8 @@ enum ResponseType {
     USERS,
     FILES,
     UPLOAD,
-    DOWNLOAD
+    DOWNLOAD,
+    DIRECT_MESSAGE
 }
 
 /**
@@ -84,6 +83,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         stage = _stage;
         stage.setOnCloseRequest((WindowEvent windowEvent) -> {
             try {
+                dos.writeInt(RequestType.LOGOUT.ordinal());
                 saveUserInfo(roomId);
             } catch (IOException ioe) {
                 alert(Alert.AlertType.ERROR, "ERROR", ioe + "");
@@ -105,6 +105,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         FlowPane fpBot = new FlowPane(8, 8);
         taInput.setPrefColumnCount(38);
         taInput.setPrefRowCount(3);
+        taInput.setWrapText(true);
         taInput.setOnKeyPressed(keyEvent -> {
             // Enter key press will send the message, Shift + Enter will start on new line
             if (keyEvent.getCode() == KeyCode.ENTER) {
@@ -124,7 +125,13 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         btnSend.setDisable(true);
 
         // Button is disabled if no input
-        taInput.textProperty().addListener((observable, oldValue, newValue) -> btnSend.setDisable(newValue.trim().length() == 0));
+        taInput.textProperty().addListener((observable, oldValue, newValue) -> {
+            if (newValue.trim().startsWith("@")) {
+                btnSend.setDisable(newValue.trim().split(" ").length <= 1);
+            } else {
+                btnSend.setDisable(newValue.trim().length() == 0);
+            }
+        });
         fpBot.getChildren().addAll(taInput, btnSend);
         FlowPane.setMargin(taInput, new Insets(8, 0, 0, 0));
 
@@ -135,6 +142,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         taChat.setEditable(false);
         taChat.setPrefColumnCount(80);
         taChat.setPrefRowCount(80);
+        taChat.setWrapText(true);
         taChat.setStyle("-fx-font-family: monospace; -fx-opacity: 1.0");
         chatSection.getChildren().addAll(menuBar, taChat, fpBot);
 
@@ -142,10 +150,25 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         listViewUsers.setCellFactory(new Callback<ListView, ListCell<Pair<String, Status>>>() {
             @Override
             public ListCell<Pair<String, Status>> call(ListView listView) {
-                return new UserStatusCell();
+                ListCell cell = new UserStatusCell();
+
+                // On selection, initiate private message with @ sign
+                cell.setOnMouseClicked((event) -> {
+                    String clickedUser = cell.getText();
+                    if (clickedUser != null) {
+                        String tag = "@" + clickedUser + " ";
+                        if (!taInput.getText().trim().startsWith(tag)) {
+                            taInput.appendText("@" + cell.getText() + " ");
+                        } else {
+                            // Remove private message tag if clicked again
+                            String undoInput = taInput.getText().replace(tag, "");
+                            taInput.setText(undoInput);
+                        }
+                    }
+                });
+                return cell;
             }
         });
-
 
         root.getChildren().addAll(chatSection, listViewUsers);
         scene = new Scene(root, 700, 500);
@@ -361,6 +384,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
         files.getDialogPane().getButtonTypes().addAll(downloadButtonType, ButtonType.CANCEL);
         Button btnDownload = (Button) files.getDialogPane().lookupButton(downloadButtonType);
         btnDownload.setDisable(true);
+
         // Disable download button if no file selected
         listViewFiles.getSelectionModel().selectedItemProperty().addListener(new ChangeListener<String>() {
             @Override
@@ -553,6 +577,11 @@ public class Client extends Application implements EventHandler<ActionEvent> {
                         case DOWNLOAD:
                             downloadFile();
                             break;
+                        case DIRECT_MESSAGE:
+                            String sender = dis.readUTF();
+                            String directMessage = dis.readUTF();
+                            directMessage(sender, directMessage);
+                            break;
                         default:
                             System.out.println("Unknown response type received");
                             break;
@@ -567,6 +596,35 @@ public class Client extends Application implements EventHandler<ActionEvent> {
                     alert(Alert.AlertType.ERROR, "Error", "Error invoking " + methodName + ": " + e.getMessage());
                 }
             }
+        }
+
+        /**
+         * Receive private message
+         *
+         * @param sender  message sender
+         * @param message private message
+         */
+        private void directMessage(String sender, String message) {
+            Platform.runLater(() -> {
+                Boolean error = sender.equals("ERROR");
+                if (!error) {
+                    log(message);
+                }
+
+                // Show popup notification
+                Popup popup = new Popup();
+                FlowPane fp = new FlowPane(8, 8);
+                fp.setPadding(new Insets(10, 5, 10, 5));
+                fp.setAlignment(Pos.CENTER);
+                fp.setStyle("-fx-background-color: #D3D3D3; -fx-font-family: monospace; -fx-border-radius: 30; -fx-background-radius: 30; -fx-opacity: 0.8");
+                String notificationMessage = error ? sender + ": " + message : sender + " just sent you a private message";
+                Label notification = new Label(notificationMessage);
+                notification.setStyle(String.format("-fx-font-weight: bold; -fx-font-size: 15px; -fx-text-fill: %s", error ? "red" : "black"));
+                fp.getChildren().add(notification);
+                popup.getContent().add(fp);
+                popup.setAutoHide(true);
+                popup.show(stage);
+            });
         }
 
         /**

@@ -164,7 +164,7 @@ public class Server {
                 onlineClientsWithRoomId.put(roomId, onlineClients);
 
                 addUserToChatRoom(user, roomId);
-                loadChatHistory(dos);
+                loadChatHistory(dos, username);
                 broadCastMessage(String.format("%s joined", username), true);
 
                 while (!isInterrupted()) {
@@ -214,7 +214,49 @@ public class Server {
          */
         private void sendMessage(String username) throws IOException {
             String message = dis.readUTF();
-            broadCastMessage(username + ": " + message, false);
+            if (message.trim().startsWith("@")) {
+                // If it's a private message, send directly to the recipient
+                int messageStart = message.trim().indexOf(" ");
+                String userTag = message.substring(0, messageStart);
+                String msg = message.substring(messageStart + 1);
+                User user = getExistingUserByUsername(userTag.replace("@", ""));
+                ChatRoom currentChatRoom = getCurrentChatRoom(roomId);
+                User currentUser = currentChatRoom.getUserById(userId);
+                sendDirectMessage(user.getId(), user.getUsername(), currentUser.getUsername(), msg, currentChatRoom);
+            } else {
+                broadCastMessage(username + ": " + message, false);
+            }
+        }
+
+        /**
+         * Send private message
+         *
+         * @param userId            recipient id
+         * @param recipientUsername recipient username
+         * @param currentUser       sender's username
+         * @param message           private message
+         * @param currentChatRoom   current chatroom
+         */
+        private void sendDirectMessage(String userId, String recipientUsername, String currentUser, String message, ChatRoom currentChatRoom) {
+            try {
+                DataOutputStream recipient = onlineClientsWithRoomId.get(roomId).getOrDefault(userId, null);
+                if (recipient == null) {
+                    dos.writeInt(ResponseType.DIRECT_MESSAGE.ordinal());
+                    dos.writeUTF("ERROR");
+                    dos.writeUTF("Sorry this user is not online");
+                    dos.flush();
+                } else {
+                    Timestamp timestamp = new Timestamp(System.currentTimeMillis());
+                    String messageWithTimeStamp = "[" + timestamp + "] " + "private message from @" + currentUser + ": " + message;
+                    recipient.writeInt(ResponseType.DIRECT_MESSAGE.ordinal());
+                    recipient.writeUTF(currentUser);
+                    recipient.writeUTF(messageWithTimeStamp);
+                    recipient.flush();
+                    currentChatRoom.addChatHistory(recipientUsername + "-" + messageWithTimeStamp);
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
         }
 
         /**
@@ -357,14 +399,22 @@ public class Server {
         /**
          * Get chat history of current chat room and send to current user's client
          *
-         * @param client current user's client
+         * @param client   current user's client
+         * @param username current client's user name
          * @throws IOException
          */
-        private void loadChatHistory(DataOutputStream client) throws IOException {
+        private void loadChatHistory(DataOutputStream client, String username) throws IOException {
             if (chatRooms.containsKey(roomId)) {
                 for (String message : chatRooms.get(roomId).getChatHistory()) {
-                    client.writeInt(ResponseType.MESSAGE.ordinal());
-                    client.writeUTF(message);
+                    if (message.contains("private message from @")) {
+                        if (message.split("-")[0].equals(username)) {
+                            client.writeInt(ResponseType.MESSAGE.ordinal());
+                            client.writeUTF(message.substring(message.indexOf("-") + 1));
+                        }
+                    } else {
+                        client.writeInt(ResponseType.MESSAGE.ordinal());
+                        client.writeUTF(message);
+                    }
                 }
             }
         }
