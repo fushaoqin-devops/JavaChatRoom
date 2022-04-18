@@ -157,7 +157,7 @@ public class Client extends Application implements EventHandler<ActionEvent> {
                     String clickedUser = cell.getText();
                     if (clickedUser != null) {
                         String tag = "@" + clickedUser + " ";
-                        if (!taInput.getText().trim().startsWith(tag)) {
+                        if (!taInput.getText().trim().contains(tag)) {
                             taInput.setText(tag + taInput.getText());
                         } else {
                             // Remove private message tag if clicked again
@@ -553,7 +553,6 @@ public class Client extends Application implements EventHandler<ActionEvent> {
             while (!Thread.currentThread().isInterrupted()) {
                 try {
                     int method = dis.readInt();
-                    System.out.println(method);
                     if (method < 0 || method >= RESPONSE_TYPES.length) {
                         System.out.println("Invalid response type");
                         System.exit(0);
