@@ -1,7 +1,10 @@
+import javafx.util.Pair;
+
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.sql.Timestamp;
+import java.util.ArrayList;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -164,7 +167,7 @@ public class Server {
                 onlineClientsWithRoomId.put(roomId, onlineClients);
 
                 addUserToChatRoom(user, roomId);
-                loadChatHistory(dos);
+                loadChatHistory(dos, username);
                 broadCastMessage(String.format("%s joined", username), true);
 
                 while (!isInterrupted()) {
@@ -214,7 +217,79 @@ public class Server {
          */
         private void sendMessage(String username) throws IOException {
             String message = dis.readUTF();
-            broadCastMessage(username + ": " + message, false);
+            if (message.trim().startsWith("@")) {
+                // If it's a private message, send directly to the recipient
+                Pair<ArrayList<String>, String> parsedResult = parseUsersAndMessage(message);
+                String msg = parsedResult.getValue();
+                ChatRoom currentChatRoom = getCurrentChatRoom(roomId);
+                for (String parsedUsername : parsedResult.getKey()) {
+                    User user = getExistingUserByUsername(parsedUsername);
+                    User currentUser = currentChatRoom.getUserById(userId);
+                    sendDirectMessage(user.getId(), user.getUsername(), currentUser.getUsername(), msg, currentChatRoom);
+                }
+            } else {
+                broadCastMessage(username + ": " + message, false);
+            }
+        }
+
+        /**
+         * Parse tagged user and message from private message
+         *
+         * @param message private message
+         * @return parsed users and message
+         */
+        private Pair<ArrayList<String>, String> parseUsersAndMessage(String message) {
+            String msg = message.trim();
+            int idx = -1;
+            ArrayList<String> users = new ArrayList<>();
+            for (int i = 0; i < msg.length(); i++) {
+                if (msg.charAt(i) == ' ') {
+                    if (msg.charAt(i + 1) != '@') {
+                        idx = i;
+                        break;
+                    }
+                }
+            }
+            for (String userTag : msg.substring(0, idx).split(" ")) {
+                users.add(userTag.replace("@", ""));
+            }
+            msg = msg.substring(idx + 1);
+            return new Pair(users, msg);
+        }
+
+        /**
+         * Send private message
+         *
+         * @param userId            recipient id
+         * @param recipientUsername recipient username
+         * @param currentUser       sender's username
+         * @param message           private message
+         * @param currentChatRoom   current chatroom
+         */
+        private void sendDirectMessage(String userId, String recipientUsername, String currentUser, String message, ChatRoom currentChatRoom) {
+            try {
+                DataOutputStream recipient = onlineClientsWithRoomId.get(roomId).getOrDefault(userId, null);
+                if (recipient == null) {
+                    dos.writeInt(ResponseType.DIRECT_MESSAGE.ordinal());
+                    dos.writeUTF("ERROR");
+                    dos.writeUTF("Sorry this user is not online");
+                    dos.flush();
+                } else {
+                    Timestamp timestamp = new Timestamp(System.currentTimeMillis());
+                    String recipientMessageWithTimeStamp = "[" + timestamp + "] " + "private message from @" + currentUser + ": " + message;
+                    recipient.writeInt(ResponseType.DIRECT_MESSAGE.ordinal());
+                    recipient.writeUTF(currentUser);
+                    recipient.writeUTF(recipientMessageWithTimeStamp);
+                    recipient.flush();
+                    dos.writeInt(ResponseType.MESSAGE.ordinal());
+                    String currentUserMessageWithTimeStamp = "[" + timestamp + "] " + "private message sent to @" + recipientUsername + ": " + message;
+                    dos.writeUTF(currentUserMessageWithTimeStamp);
+                    currentChatRoom.addChatHistory(recipientUsername + "-" + recipientMessageWithTimeStamp);
+                    currentChatRoom.addChatHistory(currentUser + "-" + currentUserMessageWithTimeStamp);
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
         }
 
         /**
@@ -357,14 +432,23 @@ public class Server {
         /**
          * Get chat history of current chat room and send to current user's client
          *
-         * @param client current user's client
+         * @param client   current user's client
+         * @param username current client's user name
          * @throws IOException
          */
-        private void loadChatHistory(DataOutputStream client) throws IOException {
+        private void loadChatHistory(DataOutputStream client, String username) throws IOException {
             if (chatRooms.containsKey(roomId)) {
                 for (String message : chatRooms.get(roomId).getChatHistory()) {
-                    client.writeInt(ResponseType.MESSAGE.ordinal());
-                    client.writeUTF(message);
+                    if (message.contains("private message from @") || message.contains("private message sent to @")) {
+                        // If it's a private message, send only to the recipient of the message
+                        if (message.split("-")[0].equals(username)) {
+                            client.writeInt(ResponseType.MESSAGE.ordinal());
+                            client.writeUTF(message.substring(message.indexOf("-") + 1));
+                        }
+                    } else {
+                        client.writeInt(ResponseType.MESSAGE.ordinal());
+                        client.writeUTF(message);
+                    }
                 }
             }
         }
